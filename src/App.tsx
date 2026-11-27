@@ -9,6 +9,7 @@ import {
   STARTER_RULES,
 } from './data/starterContent';
 import {
+  DispatchMode,
   DriveFolderLink,
   MarkdownDoc,
   MediaAsset,
@@ -127,8 +128,8 @@ export default function App() {
   const [mediaLibrary, setMediaLibrary] = useState<MediaAsset[]>(() =>
     workspaceStorage.loadLocalMedia(STARTER_MEDIA)
   );
-  const [dryRunMode, setDryRunMode] = useState<boolean>(() =>
-    workspaceStorage.loadDryRunMode(true)
+  const [dispatchMode, setDispatchMode] = useState<DispatchMode>(() =>
+    workspaceStorage.loadDispatchMode('dry-run')
   );
 
   // Strict in-memory credentials (never persisted to localStorage)
@@ -142,6 +143,8 @@ export default function App() {
     twitterClientId: '',
     twitterHandle: '',
     twitterAccessToken: '',
+    twitterCorsRelayUrl: '',
+    webhookUrl: '',
   });
 
   // Google Auth state
@@ -185,8 +188,8 @@ export default function App() {
     workspaceStorage.saveLocalMedia(mediaLibrary);
   }, [mediaLibrary]);
   useEffect(() => {
-    workspaceStorage.saveDryRunMode(dryRunMode);
-  }, [dryRunMode]);
+    workspaceStorage.saveDispatchMode(dispatchMode);
+  }, [dispatchMode]);
 
   // Initialize Firebase Google Auth listener
   useEffect(() => {
@@ -224,8 +227,9 @@ export default function App() {
 
         for (const platform of post.platforms) {
           results[platform] = await publishToSocialPlatform(platform, post.text, creds, {
-            dryRun: dryRunMode,
+            dispatchMode,
             media,
+            sourceDocTitle: post.sourceDocTitle,
           });
         }
 
@@ -245,9 +249,11 @@ export default function App() {
 
         if (allOk) {
           notify(
-            dryRunMode
+            dispatchMode === 'dry-run'
               ? `Simulated release of post from ${post.sourceDocTitle}.md to ${post.platforms.join(', ')}.`
-              : `Published post from ${post.sourceDocTitle}.md to ${post.platforms.join(', ')}.`
+              : dispatchMode === 'webhook'
+                ? `Dispatched post from ${post.sourceDocTitle}.md via Webhook Bridge.`
+                : `Published post from ${post.sourceDocTitle}.md to ${post.platforms.join(', ')}.`
           );
         } else {
           const firstErr = Object.values(results).find((r) => !r?.ok)?.error;
@@ -258,7 +264,7 @@ export default function App() {
         autoReleaseLockRef.current = false;
       }
     },
-    [creds, dryRunMode, mediaLibrary, notify]
+    [creds, dispatchMode, mediaLibrary, notify]
   );
 
   // Live clock + automated interval / scheduled-time release loop
@@ -609,7 +615,7 @@ export default function App() {
             instagram: Boolean(creds.instagramUserId && creds.facebookPageToken),
             twitter: Boolean(creds.twitterAccessToken),
           }}
-          dryRunMode={dryRunMode}
+          dispatchMode={dispatchMode}
         />
 
         <main className="flex-1 p-5 sm:p-8 max-w-6xl w-full mx-auto">
@@ -639,7 +645,7 @@ export default function App() {
               queue={queue}
               mediaLibrary={mediaLibrary}
               creds={creds}
-              dryRunMode={dryRunMode}
+              dispatchMode={dispatchMode}
               isReleasingId={isReleasingId}
               onUpdatePost={(id, patch) =>
                 setQueue((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)))
@@ -772,13 +778,15 @@ export default function App() {
             <ConnectionsView
               creds={creds}
               onUpdateCreds={(patch) => setCreds((prev) => ({ ...prev, ...patch }))}
-              dryRunMode={dryRunMode}
-              onToggleDryRun={(next) => {
-                setDryRunMode(next);
+              dispatchMode={dispatchMode}
+              onChangeDispatchMode={(mode) => {
+                setDispatchMode(mode);
                 notify(
-                  next
+                  mode === 'dry-run'
                     ? 'Switched to Payload Dry-Run simulation mode.'
-                    : 'Switched to Live Official Social APIs mode.'
+                    : mode === 'webhook'
+                      ? 'Switched to Webhook Bridge dispatch mode.'
+                      : 'Switched to Live Official Social APIs mode.'
                 );
               }}
               onNotify={notify}
@@ -794,7 +802,7 @@ export default function App() {
             ? mediaLibrary.find((m) => m.id === confirmPost.mediaId)
             : undefined
         }
-        dryRunMode={dryRunMode}
+        dispatchMode={dispatchMode}
         onCancel={() => setConfirmPost(null)}
         onConfirm={(post) => {
           setConfirmPost(null);

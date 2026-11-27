@@ -9,8 +9,10 @@ import {
   Send,
   Trash2,
   AlertCircle,
+  ExternalLink,
 } from 'lucide-react';
 import {
+  DispatchMode,
   MediaAsset,
   QueuePost,
   SocialCredentialsMemory,
@@ -24,7 +26,7 @@ interface QueueWorkspaceProps {
   queue: QueuePost[];
   mediaLibrary: MediaAsset[];
   creds: SocialCredentialsMemory;
-  dryRunMode: boolean;
+  dispatchMode: DispatchMode;
   isReleasingId: string | null;
   onUpdatePost: (id: string, patch: Partial<QueuePost>) => void;
   onMovePost: (id: string, direction: 'up' | 'down') => void;
@@ -43,7 +45,7 @@ export const QueueWorkspace: React.FC<QueueWorkspaceProps> = ({
   queue,
   mediaLibrary,
   creds,
-  dryRunMode,
+  dispatchMode,
   isReleasingId,
   onUpdatePost,
   onMovePost,
@@ -100,8 +102,14 @@ export const QueueWorkspace: React.FC<QueueWorkspaceProps> = ({
 
   const payloadPreview = useMemo(() => {
     if (!activePost) return null;
-    return buildApiPayloadPreview(activePreviewPlatform, activePost.text, creds, activeMedia);
-  }, [activePost, activePreviewPlatform, creds, activeMedia]);
+    return buildApiPayloadPreview(
+      activePreviewPlatform,
+      activePost.text,
+      creds,
+      activeMedia,
+      dispatchMode
+    );
+  }, [activePost, activePreviewPlatform, creds, activeMedia, dispatchMode]);
 
   const togglePlatform = (post: QueuePost, platform: SocialPlatform) => {
     const has = post.platforms.includes(platform);
@@ -527,14 +535,28 @@ export const QueueWorkspace: React.FC<QueueWorkspaceProps> = ({
 
               {/* API Payload Inspector + Release Action */}
               <div className="pt-2 border-t border-slate-200 space-y-3">
-                <button
-                  type="button"
-                  onClick={() => setShowPayload((prev) => !prev)}
-                  className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-600 hover:text-slate-900 cursor-pointer"
-                >
-                  <Code2 className="w-3.5 h-3.5" />
-                  <span>{showPayload ? 'Hide API Payload' : 'Inspect Official API Payload'}</span>
-                </button>
+                <div className="flex items-center justify-between gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowPayload((prev) => !prev)}
+                    className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-600 hover:text-slate-900 cursor-pointer"
+                  >
+                    <Code2 className="w-3.5 h-3.5" />
+                    <span>{showPayload ? 'Hide API Payload' : 'Inspect API Payload'}</span>
+                  </button>
+
+                  {activePost.platforms.includes('twitter') && (
+                    <a
+                      href={`https://x.com/intent/tweet?text=${encodeURIComponent(activePost.text)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-blue-700"
+                    >
+                      <span>Open in X Composer</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  )}
+                </div>
 
                 {showPayload && payloadPreview && (
                   <pre className="p-3 bg-slate-900 text-slate-100 rounded-lg text-xs font-mono overflow-x-auto leading-relaxed">
@@ -555,7 +577,11 @@ export const QueueWorkspace: React.FC<QueueWorkspaceProps> = ({
                   >
                     <Send className="w-4 h-4" />
                     <span>
-                      {dryRunMode ? 'Simulate Release of This Post' : 'Release This Post Now'}
+                      {dispatchMode === 'dry-run'
+                        ? 'Simulate Release of This Post'
+                        : dispatchMode === 'webhook'
+                          ? 'Dispatch via Webhook Bridge'
+                          : 'Release This Post Now'}
                     </span>
                   </button>
                 )}

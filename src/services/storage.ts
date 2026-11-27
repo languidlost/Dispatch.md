@@ -1,4 +1,5 @@
 import {
+  DispatchMode,
   DriveFolderLink,
   MarkdownDoc,
   MediaAsset,
@@ -14,7 +15,7 @@ const STORAGE_KEYS = {
   schedule: 'dispatchmd_schedule_v1',
   driveFolders: 'dispatchmd_drive_folders_v1',
   localMedia: 'dispatchmd_local_media_v1',
-  dryRunMode: 'dispatchmd_dry_run_v1',
+  dispatchMode: 'dispatchmd_dispatch_mode_v1',
 };
 
 function safeRead<T>(key: string, fallback: T): T {
@@ -74,6 +75,10 @@ export const workspaceStorage = {
       media.filter((m) => m.source === 'sample' || (m.source === 'local' && !m.url.startsWith('blob:')))
     ),
 
-  loadDryRunMode: (fallback: boolean) => safeRead<boolean>(STORAGE_KEYS.dryRunMode, fallback),
-  saveDryRunMode: (dryRun: boolean) => safeWrite(STORAGE_KEYS.dryRunMode, dryRun),
+  loadDispatchMode: (fallback: DispatchMode): DispatchMode => {
+    const val = safeRead<string>(STORAGE_KEYS.dispatchMode, fallback);
+    if (val === 'dry-run' || val === 'official' || val === 'webhook') return val;
+    return fallback;
+  },
+  saveDispatchMode: (mode: DispatchMode) => safeWrite(STORAGE_KEYS.dispatchMode, mode),
 };

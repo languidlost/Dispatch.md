@@ -1,17 +1,10 @@
 import {
+  DispatchMode,
   MediaAsset,
   PublishAttemptResult,
   SocialCredentialsMemory,
   SocialPlatform,
 } from '../types';
-
-export interface SocialOAuthPopupResult {
-  platform: 'facebook' | 'twitter';
-  accessToken?: string;
-  code?: string;
-  state?: string;
-  error?: string;
-}
 
 export interface FacebookManagedPage {
   id: string;
@@ -23,36 +16,91 @@ export interface FacebookManagedPage {
   };
 }
 
+const OAUTH_CHANNEL_NAME = 'dispatchmd_oauth_v1';
+
 export function getStaticCallbackUri(): string {
   return `${window.location.origin}${window.location.pathname}`;
 }
 
-// Handle OAuth popup return on static GitHub Pages URLs
+export function extractOAuthParamsFromUrl(urlString: string): {
+  code: string | null;
+  state: string | null;
+  accessToken: string | null;
+  error: string | null;
+} {
+  const parsed = new URL(urlString, window.location.origin);
+  const searchParams = new URLSearchParams(parsed.search);
+  const hashParams = new URLSearchParams(parsed.hash.replace(/^#/, ''));
+  return {
+    code: searchParams.get('code'),
+    state: searchParams.get('state'),
+    accessToken: hashParams.get('access_token'),
+    error:
+      searchParams.get('error_description') ||
+      searchParams.get('error') ||
+      hashParams.get('error_description') ||
+      hashParams.get('error'),
+  };
+}
+
+// Handle OAuth popup return on static GitHub Pages URLs (works even when COOP clears window.opener)
 export function handleStaticOAuthCallbackIfPopup(): boolean {
-  if (!window.opener) return false;
-  const searchParams = new URLSearchParams(window.location.search);
-  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+  const { code, state, accessToken, error } = extractOAuthParamsFromUrl(window.location.href);
+  if (!code && !accessToken && !error) return false;
 
-  const code = searchParams.get('code');
-  const state = searchParams.get('state');
-  const accessToken = hashParams.get('access_token');
-  const error = searchParams.get('error') || hashParams.get('error');
+  const payload = {
+    type: 'DISPATCH_SOCIAL_OAUTH_CALLBACK',
+    code,
+    state,
+    accessToken,
+    error,
+  };
 
-  if (code || accessToken || error) {
-    window.opener.postMessage(
-      {
-        type: 'DISPATCH_SOCIAL_OAUTH_CALLBACK',
-        code,
-        state,
-        accessToken,
-        error,
-      },
-      window.location.origin
-    );
+  let delivered = false;
+  try {
+    if ('BroadcastChannel' in window) {
+      const channel = new BroadcastChannel(OAUTH_CHANNEL_NAME);
+      channel.postMessage(payload);
+      channel.close();
+      delivered = true;
+    }
+  } catch {
+    // Fallback to window.opener below
+  }
+
+  if (window.opener) {
+    try {
+      window.opener.postMessage(payload, window.location.origin);
+      delivered = true;
+    } catch {
+      // Ignore cross-origin opener error
+    }
+  }
+
+  if (window.opener || delivered) {
     window.close();
+    // Clean URL if popup wasn't permitted to close itself
+    try {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } catch {
+      // Ignore history error
+    }
     return true;
   }
+
   return false;
+}
+
+function resolveTwitterApiUrl(path: string, relayBase?: string): string {
+  const cleanRelay = (relayBase || '').trim().replace(/\/+$/, '');
+  if (!cleanRelay) {
+    return `https://api.x.com${path}`;
+  }
+  const parsed = new URL(cleanRelay);
+  if (parsed.protocol !== 'https:' && parsed.hostname !== 'localhost') {
+    throw new Error('X CORS relay URL must use https://.');
+  }
+  return `${cleanRelay}${path}`;
 }
 
 // PKCE helpers for X (Twitter) API v2 OAuth 2.0 Public Client flow
@@ -73,10 +121,9 @@ async function generatePkcePair(): Promise<{ verifier: string; challenge: string
   return { verifier, challenge };
 }
 
-export async function startTwitterPkceOAuth(clientId: string): Promise<{
-  accessToken: string;
-  handle: string;
-}> {
+export async function createTwitterAuthRequest(
+  clientId: string
+): Promise<{ authUrl: string; state: string; verifier: string; redirectUri: string }> {
   if (!clientId.trim()) {
     throw new Error('Enter your X (Twitter) OAuth 2.0 Client ID first.');
   }
@@ -94,18 +141,31 @@ export async function startTwitterPkceOAuth(clientId: string): Promise<{
     code_challenge_method: 'S256',
   });
 
-  const authUrl = `https://x.com/i/oauth2/authorize?${params.toString()}`;
-  const code = await openOAuthPopupAndWaitForCode(authUrl, state);
+  return {
+    authUrl: `https://x.com/i/oauth2/authorize?${params.toString()}`,
+    state,
+    verifier,
+    redirectUri,
+  };
+}
 
-  const tokenRes = await fetch('https://api.x.com/2/oauth2/token', {
+export async function exchangeTwitterAuthCode(params: {
+  code: string;
+  clientId: string;
+  redirectUri: string;
+  verifier: string;
+  relayUrl?: string;
+}): Promise<{ accessToken: string; handle: string }> {
+  const tokenEndpoint = resolveTwitterApiUrl('/2/oauth2/token', params.relayUrl);
+  const tokenRes = await fetch(tokenEndpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
-      code,
+      code: params.code,
       grant_type: 'authorization_code',
-      client_id: clientId.trim(),
-      redirect_uri: redirectUri,
-      code_verifier: verifier,
+      client_id: params.clientId.trim(),
+      redirect_uri: params.redirectUri,
+      code_verifier: params.verifier,
     }),
   });
 
@@ -114,21 +174,43 @@ export async function startTwitterPkceOAuth(clientId: string): Promise<{
     throw new Error(
       err?.error_description ||
         err?.error ||
-        `X OAuth token exchange failed (${tokenRes.status}). Verify redirect URI & public client settings.`
+        `X OAuth token exchange failed (${tokenRes.status}).`
     );
   }
   const tokenJson = await tokenRes.json();
   const accessToken = tokenJson.access_token as string;
-  const userInfo = await verifyTwitterToken(accessToken);
+  const userInfo = await verifyTwitterToken(accessToken, params.relayUrl);
   return { accessToken, handle: userInfo.username };
 }
 
-export async function verifyTwitterToken(accessToken: string): Promise<{
+export async function startTwitterPkceOAuth(
+  clientId: string,
+  relayUrl?: string
+): Promise<{
+  accessToken: string;
+  handle: string;
+}> {
+  const req = await createTwitterAuthRequest(clientId);
+  const code = await openOAuthPopupAndWaitForCode(req.authUrl, req.state);
+  return exchangeTwitterAuthCode({
+    code,
+    clientId,
+    redirectUri: req.redirectUri,
+    verifier: req.verifier,
+    relayUrl,
+  });
+}
+
+export async function verifyTwitterToken(
+  accessToken: string,
+  relayUrl?: string
+): Promise<{
   id: string;
   username: string;
   name: string;
 }> {
-  const res = await fetch('https://api.x.com/2/users/me', {
+  const endpoint = resolveTwitterApiUrl('/2/users/me', relayUrl);
+  const res = await fetch(endpoint, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!res.ok) {
@@ -180,39 +262,76 @@ export async function fetchMetaManagedPages(
   return json.data || [];
 }
 
+export async function testFacebookPageConnection(
+  pageId: string,
+  pageToken: string
+): Promise<{ id: string; name: string }> {
+  const res = await fetch(
+    `https://graph.facebook.com/v21.0/${encodeURIComponent(
+      pageId.trim()
+    )}?fields=id,name&access_token=${encodeURIComponent(pageToken.trim())}`
+  );
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || json.error) {
+    throw new Error(json?.error?.message || `Facebook Page check failed (${res.status})`);
+  }
+  return { id: json.id, name: json.name };
+}
+
 function openOAuthPopupAndWaitForCode(url: string, expectedState: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const popup = window.open(url, 'social_oauth_popup', 'width=600,height=720');
     if (!popup) {
-      reject(new Error('Popup was blocked by the browser. Allow popups to authorize.'));
+      reject(new Error('Popup was blocked by the browser. Allow popups or use direct token mode.'));
       return;
     }
 
-    const timer = window.setInterval(() => {
-      if (popup.closed) {
-        window.clearInterval(timer);
-        window.removeEventListener('message', onMessage);
-        reject(new Error('Authorization window was closed before completing.'));
-      }
-    }, 500);
+    let settled = false;
+    const channel = 'BroadcastChannel' in window ? new BroadcastChannel(OAUTH_CHANNEL_NAME) : null;
 
-    const onMessage = (event: MessageEvent) => {
-      if (event.origin !== window.location.origin) return;
-      if (event.data?.type !== 'DISPATCH_SOCIAL_OAUTH_CALLBACK') return;
+    const cleanup = () => {
       window.clearInterval(timer);
-      window.removeEventListener('message', onMessage);
-      if (event.data.error) {
-        reject(new Error(String(event.data.error)));
+      window.removeEventListener('message', onWindowMessage);
+      channel?.close();
+    };
+
+    const handlePayload = (data: Record<string, unknown>) => {
+      if (settled || data?.type !== 'DISPATCH_SOCIAL_OAUTH_CALLBACK') return;
+      settled = true;
+      cleanup();
+      if (data.error) {
+        reject(new Error(String(data.error)));
         return;
       }
-      if (event.data.state !== expectedState) {
+      if (data.state !== expectedState) {
         reject(new Error('OAuth state mismatch.'));
         return;
       }
-      resolve(String(event.data.code));
+      resolve(String(data.code || ''));
     };
 
-    window.addEventListener('message', onMessage);
+    const onWindowMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      handlePayload(event.data || {});
+    };
+
+    if (channel) {
+      channel.onmessage = (event) => handlePayload(event.data || {});
+    }
+
+    const timer = window.setInterval(() => {
+      if (popup.closed && !settled) {
+        settled = true;
+        cleanup();
+        reject(
+          new Error(
+            'Authorization window closed before returning a code. Use Direct Token or Webhook mode if popup OAuth is restricted.'
+          )
+        );
+      }
+    }, 600);
+
+    window.addEventListener('message', onWindowMessage);
   });
 }
 
@@ -220,39 +339,60 @@ function openOAuthPopupAndWaitForToken(url: string, expectedState: string): Prom
   return new Promise((resolve, reject) => {
     const popup = window.open(url, 'meta_oauth_popup', 'width=620,height=740');
     if (!popup) {
-      reject(new Error('Popup was blocked by the browser. Allow popups to authorize.'));
+      reject(new Error('Popup was blocked by the browser. Use Direct Graph Token mode below instead.'));
       return;
     }
 
-    const timer = window.setInterval(() => {
-      if (popup.closed) {
-        window.clearInterval(timer);
-        window.removeEventListener('message', onMessage);
-        reject(new Error('Authorization window was closed before completing.'));
-      }
-    }, 500);
+    let settled = false;
+    const channel = 'BroadcastChannel' in window ? new BroadcastChannel(OAUTH_CHANNEL_NAME) : null;
 
-    const onMessage = (event: MessageEvent) => {
-      if (event.origin !== window.location.origin) return;
-      if (event.data?.type !== 'DISPATCH_SOCIAL_OAUTH_CALLBACK') return;
+    const cleanup = () => {
       window.clearInterval(timer);
-      window.removeEventListener('message', onMessage);
-      if (event.data.error) {
-        reject(new Error(String(event.data.error)));
+      window.removeEventListener('message', onWindowMessage);
+      channel?.close();
+    };
+
+    const handlePayload = (data: Record<string, unknown>) => {
+      if (settled || data?.type !== 'DISPATCH_SOCIAL_OAUTH_CALLBACK') return;
+      settled = true;
+      cleanup();
+      if (data.error) {
+        reject(new Error(String(data.error)));
         return;
       }
-      if (event.data.state && event.data.state !== expectedState) {
+      if (data.state && data.state !== expectedState) {
         reject(new Error('OAuth state mismatch.'));
         return;
       }
-      if (!event.data.accessToken) {
+      if (!data.accessToken) {
         reject(new Error('No access token received from Meta OAuth.'));
         return;
       }
-      resolve(String(event.data.accessToken));
+      resolve(String(data.accessToken));
     };
 
-    window.addEventListener('message', onMessage);
+    const onWindowMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      handlePayload(event.data || {});
+    };
+
+    if (channel) {
+      channel.onmessage = (event) => handlePayload(event.data || {});
+    }
+
+    const timer = window.setInterval(() => {
+      if (popup.closed && !settled) {
+        settled = true;
+        cleanup();
+        reject(
+          new Error(
+            'Meta popup closed before returning a token. Use the Guided Graph Token setup below instead (no popup or redirect URI needed).'
+          )
+        );
+      }
+    }, 600);
+
+    window.addEventListener('message', onWindowMessage);
   });
 }
 
@@ -260,8 +400,22 @@ export function buildApiPayloadPreview(
   platform: SocialPlatform,
   text: string,
   creds: SocialCredentialsMemory,
-  media?: MediaAsset
+  media?: MediaAsset,
+  dispatchMode: DispatchMode = 'official'
 ): { method: string; endpoint: string; body: Record<string, unknown> } {
+  if (dispatchMode === 'webhook') {
+    return {
+      method: 'POST',
+      endpoint: creds.webhookUrl || '<automation-webhook-url>',
+      body: {
+        platform,
+        text,
+        imageUrl: media?.publicUrl || undefined,
+        mediaName: media?.name || undefined,
+      },
+    };
+  }
+
   if (platform === 'facebook') {
     const pageId = creds.facebookPageId || '{page-id}';
     if (media) {
@@ -298,9 +452,13 @@ export function buildApiPayloadPreview(
     };
   }
 
+  const xEndpoint = creds.twitterCorsRelayUrl
+    ? `${creds.twitterCorsRelayUrl.replace(/\/+$/, '')}/2/tweets`
+    : 'https://api.x.com/2/tweets';
+
   return {
     method: 'POST',
-    endpoint: 'https://api.x.com/2/tweets',
+    endpoint: xEndpoint,
     body: {
       text,
     },
@@ -311,12 +469,18 @@ export async function publishToSocialPlatform(
   platform: SocialPlatform,
   text: string,
   creds: SocialCredentialsMemory,
-  options: { dryRun: boolean; media?: MediaAsset }
+  options: { dispatchMode: DispatchMode; media?: MediaAsset; sourceDocTitle?: string }
 ): Promise<PublishAttemptResult> {
   const now = new Date().toISOString();
-  const preview = buildApiPayloadPreview(platform, text, creds, options.media);
+  const preview = buildApiPayloadPreview(
+    platform,
+    text,
+    creds,
+    options.media,
+    options.dispatchMode
+  );
 
-  if (options.dryRun) {
+  if (options.dispatchMode === 'dry-run') {
     return {
       ok: true,
       dryRun: true,
@@ -327,6 +491,38 @@ export async function publishToSocialPlatform(
   }
 
   try {
+    if (options.dispatchMode === 'webhook') {
+      const url = creds.webhookUrl.trim();
+      if (!url) {
+        throw new Error('Enter a Webhook Bridge URL under Connections first.');
+      }
+      const parsed = new URL(url);
+      if (parsed.protocol !== 'https:' && parsed.hostname !== 'localhost') {
+        throw new Error('Webhook Bridge URL must use https://.');
+      }
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          platform,
+          text,
+          imageUrl: options.media?.publicUrl || null,
+          mediaName: options.media?.name || null,
+          sourceDocTitle: options.sourceDocTitle || null,
+          dispatchedAt: now,
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(`Webhook bridge returned HTTP ${res.status}.`);
+      }
+      return {
+        ok: true,
+        externalId: `webhook-${platform}-${Date.now()}`,
+        timestamp: now,
+        endpoint: preview.endpoint,
+      };
+    }
+
     if (platform === 'facebook') {
       if (!creds.facebookPageId || !creds.facebookPageToken) {
         throw new Error('Facebook Page ID and Page Access Token are required.');
@@ -395,7 +591,6 @@ export async function publishToSocialPlatform(
         );
       }
 
-      // Step 1: Create media container
       const createRes = await fetch(
         `https://graph.facebook.com/v21.0/${encodeURIComponent(creds.instagramUserId)}/media`,
         {
@@ -415,7 +610,6 @@ export async function publishToSocialPlatform(
         );
       }
 
-      // Step 2: Publish container
       const pubRes = await fetch(
         `https://graph.facebook.com/v21.0/${encodeURIComponent(creds.instagramUserId)}/media_publish`,
         {
@@ -442,7 +636,7 @@ export async function publishToSocialPlatform(
       };
     }
 
-    // X (Twitter) API v2
+    // X (Twitter) API v2 (direct or via user-supplied CORS relay)
     if (!creds.twitterAccessToken) {
       throw new Error('X (Twitter) OAuth 2.0 Access Token is required.');
     }
@@ -451,7 +645,8 @@ export async function publishToSocialPlatform(
         ? `${text}\n${options.media.publicUrl}`
         : text;
 
-    const res = await fetch('https://api.x.com/2/tweets', {
+    const tweetEndpoint = resolveTwitterApiUrl('/2/tweets', creds.twitterCorsRelayUrl);
+    const res = await fetch(tweetEndpoint, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${creds.twitterAccessToken}`,
@@ -474,9 +669,14 @@ export async function publishToSocialPlatform(
       endpoint: preview.endpoint,
     };
   } catch (error) {
+    const rawMsg = error instanceof Error ? error.message : 'Unexpected network or API error.';
+    const corsHint =
+      platform === 'twitter' && rawMsg.toLowerCase().includes('failed to fetch')
+        ? ' Browser blocked cross-origin request to api.x.com (CORS). Add a Cloudflare Worker CORS Relay URL or switch to Webhook Bridge under Connections.'
+        : '';
     return {
       ok: false,
-      error: error instanceof Error ? error.message : 'Unexpected network or API error.',
+      error: `${rawMsg}${corsHint}`,
       timestamp: now,
       endpoint: preview.endpoint,
     };

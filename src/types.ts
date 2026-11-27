@@ -114,6 +114,8 @@ export interface DriveFolderLink {
   itemCount: number;
 }
 
+export type DispatchMode = 'dry-run' | 'official' | 'webhook';
+
 export interface SocialCredentialsMemory {
   facebookPageId: string;
   facebookPageName: string;
@@ -124,4 +126,6 @@ export interface SocialCredentialsMemory {
   twitterClientId: string;
   twitterHandle: string;
   twitterAccessToken: string;
+  twitterCorsRelayUrl: string;
+  webhookUrl: string;
 }

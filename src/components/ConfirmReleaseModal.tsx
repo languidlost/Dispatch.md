@@ -1,12 +1,12 @@
 import React from 'react';
 import { AlertTriangle, Send, X } from 'lucide-react';
-import { MediaAsset, QueuePost } from '../types';
+import { DispatchMode, MediaAsset, QueuePost } from '../types';
 import { getCharDiagnostics } from '../services/snipEngine';
 
 interface ConfirmReleaseModalProps {
   post: QueuePost | null;
   media?: MediaAsset;
-  dryRunMode: boolean;
+  dispatchMode: DispatchMode;
   onCancel: () => void;
   onConfirm: (post: QueuePost) => void;
 }
@@ -14,7 +14,7 @@ interface ConfirmReleaseModalProps {
 export const ConfirmReleaseModal: React.FC<ConfirmReleaseModalProps> = ({
   post,
   media,
-  dryRunMode,
+  dispatchMode,
   onCancel,
   onConfirm,
 }) => {
@@ -23,7 +23,9 @@ export const ConfirmReleaseModal: React.FC<ConfirmReleaseModalProps> = ({
   const diagnostics = getCharDiagnostics(post.text, post.platforms);
   const hasOverLimit = diagnostics.some((d) => d.overLimit);
   const needsPublicUrlForIg =
-    post.platforms.includes('instagram') && (!media || !media.publicUrl);
+    dispatchMode === 'official' &&
+    post.platforms.includes('instagram') &&
+    (!media || !media.publicUrl);
 
   return (
     <div
@@ -35,7 +37,11 @@ export const ConfirmReleaseModal: React.FC<ConfirmReleaseModalProps> = ({
       <div className="w-full max-w-lg bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden">
         <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
           <h2 id="confirm-release-title" className="font-display text-base font-semibold text-slate-900">
-            {dryRunMode ? 'Simulate Single-Post Release' : 'Confirm Live Social Release'}
+            {dispatchMode === 'dry-run'
+              ? 'Simulate Single-Post Release'
+              : dispatchMode === 'webhook'
+                ? 'Confirm Webhook Bridge Dispatch'
+                : 'Confirm Live Social Release'}
           </h2>
           <button
             type="button"
@@ -49,9 +55,11 @@ export const ConfirmReleaseModal: React.FC<ConfirmReleaseModalProps> = ({
 
         <div className="p-6 space-y-4">
           <p className="text-sm text-slate-600">
-            {dryRunMode
+            {dispatchMode === 'dry-run'
               ? 'Payload Dry-Run mode is active. This will simulate sending one post and log the exact official API endpoints without publishing externally.'
-              : 'This will immediately publish this single post through the configured official public APIs.'}
+              : dispatchMode === 'webhook'
+                ? 'Webhook Bridge mode is active. This will send the post JSON payload to your configured automation webhook.'
+                : 'This will immediately publish this single post through the configured official public APIs.'}
           </p>
 
           <div className="border border-slate-200 rounded-lg p-3.5 bg-slate-50 text-sm text-slate-800 whitespace-pre-wrap max-h-44 overflow-y-auto">
@@ -69,7 +77,7 @@ export const ConfirmReleaseModal: React.FC<ConfirmReleaseModalProps> = ({
             )}
           </div>
 
-          {(hasOverLimit || (needsPublicUrlForIg && !dryRunMode)) && (
+          {(hasOverLimit || needsPublicUrlForIg) && (
             <div className="p-3 rounded-lg border border-amber-200 bg-amber-50 text-xs text-amber-900 flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600 mt-0.5" />
               <div className="space-y-1">
@@ -78,7 +86,7 @@ export const ConfirmReleaseModal: React.FC<ConfirmReleaseModalProps> = ({
                     Text exceeds the character limit for at least one selected platform (X max 280 chars).
                   </p>
                 )}
-                {needsPublicUrlForIg && !dryRunMode && (
+                {needsPublicUrlForIg && (
                   <p>
                     Instagram Graph API v21.0 requires a publicly reachable HTTPS image URL on the attached photo.
                   </p>
@@ -103,7 +111,13 @@ export const ConfirmReleaseModal: React.FC<ConfirmReleaseModalProps> = ({
             className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:bg-slate-300 cursor-pointer"
           >
             <Send className="w-4 h-4" />
-            <span>{dryRunMode ? 'Run Simulation' : 'Publish Post Now'}</span>
+            <span>
+              {dispatchMode === 'dry-run'
+                ? 'Run Simulation'
+                : dispatchMode === 'webhook'
+                  ? 'Send via Webhook'
+                  : 'Publish Post Now'}
+            </span>
           </button>
         </div>
       </div>

@@ -31,7 +31,7 @@ interface SidebarProps {
     instagram: boolean;
     twitter: boolean;
   };
-  dryRunMode: boolean;
+  dispatchMode: 'dry-run' | 'official' | 'webhook';
 }
 
 const SIDEBAR_ITEMS: Array<{
@@ -54,7 +54,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   countdownText,
   stats,
   connectedSummary,
-  dryRunMode,
+  dispatchMode,
 }) => {
   const [newTimeInput, setNewTimeInput] = useState('12:00');
 
@@ -276,8 +276,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="p-4 border-t border-slate-200 bg-slate-50/70 space-y-2 text-xs text-slate-600">
         <div className="flex items-center justify-between">
           <span>Dispatch Mode</span>
-          <span className={dryRunMode ? 'font-medium text-amber-700' : 'font-medium text-emerald-700'}>
-            {dryRunMode ? 'Payload Dry-Run' : 'Live Social APIs'}
+          <span
+            className={
+              dispatchMode === 'dry-run'
+                ? 'font-medium text-amber-700'
+                : 'font-medium text-emerald-700'
+            }
+          >
+            {dispatchMode === 'dry-run'
+              ? 'Payload Dry-Run'
+              : dispatchMode === 'webhook'
+                ? 'Webhook Bridge'
+                : 'Live Social APIs'}
           </span>
         </div>
         <div className="flex items-center justify-between">
@@ -289,13 +299,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="flex items-center justify-between">
           <span>Social Channels</span>
           <span className="font-mono tabular-nums text-slate-800">
-            {[
-              connectedSummary.facebook ? 'FB' : null,
-              connectedSummary.instagram ? 'IG' : null,
-              connectedSummary.twitter ? 'X' : null,
-            ]
-              .filter(Boolean)
-              .join(' · ') || 'None'}
+            {dispatchMode === 'webhook'
+              ? 'Webhook'
+              : [
+                  connectedSummary.facebook ? 'FB' : null,
+                  connectedSummary.instagram ? 'IG' : null,
+                  connectedSummary.twitter ? 'X' : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ') || 'None'}
           </span>
         </div>
       </div>
