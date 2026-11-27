@@ -9,10 +9,10 @@ import {
   STARTER_RULES,
 } from './data/starterContent';
 import {
-  DispatchMode,
   DriveFolderLink,
   MarkdownDoc,
   MediaAsset,
+  PlatformDispatchConfig,
   QueuePost,
   ScheduleConfig,
   SnipCandidate,
@@ -128,8 +128,12 @@ export default function App() {
   const [mediaLibrary, setMediaLibrary] = useState<MediaAsset[]>(() =>
     workspaceStorage.loadLocalMedia(STARTER_MEDIA)
   );
-  const [dispatchMode, setDispatchMode] = useState<DispatchMode>(() =>
-    workspaceStorage.loadDispatchMode('dry-run')
+  const [platformModes, setPlatformModes] = useState<PlatformDispatchConfig>(() =>
+    workspaceStorage.loadPlatformModes({
+      facebook: 'dry-run',
+      instagram: 'dry-run',
+      twitter: 'dry-run',
+    })
   );
 
   // Strict in-memory credentials (never persisted to localStorage)
@@ -156,7 +160,10 @@ export default function App() {
   const [isLoadingPhotos, setIsLoadingPhotos] = useState(false);
 
   // Release & notification state
-  const [confirmPost, setConfirmPost] = useState<QueuePost | null>(null);
+  const [confirmRequest, setConfirmRequest] = useState<{
+    post: QueuePost;
+    onlyPlatforms?: SocialPlatform[];
+  } | null>(null);
   const [isReleasingId, setIsReleasingId] = useState<string | null>(null);
   const [banner, setBanner] = useState<{ text: string; type: 'info' | 'error' } | null>(null);
   const [nowTick, setNowTick] = useState(() => new Date());
@@ -188,8 +195,8 @@ export default function App() {
     workspaceStorage.saveLocalMedia(mediaLibrary);
   }, [mediaLibrary]);
   useEffect(() => {
-    workspaceStorage.saveDispatchMode(dispatchMode);
-  }, [dispatchMode]);
+    workspaceStorage.savePlatformModes(platformModes);
+  }, [platformModes]);
 
   // Initialize Firebase Google Auth listener
   useEffect(() => {
@@ -214,8 +221,23 @@ export default function App() {
   );
 
   const executeSinglePostRelease = useCallback(
-    async (post: QueuePost) => {
+    async (post: QueuePost, onlyPlatforms?: SocialPlatform[]) => {
       if (autoReleaseLockRef.current) return;
+
+      const platformsToRun = (onlyPlatforms || post.platforms).filter((p) => {
+        if (platformModes[p] === 'skip') return false;
+        if (!onlyPlatforms && post.results?.[p]?.ok) return false;
+        return true;
+      });
+
+      if (platformsToRun.length === 0) {
+        notify(
+          'No active un-published channels remain for this post. Enable a channel in Connections or pick one manually.',
+          'error'
+        );
+        return;
+      }
+
       autoReleaseLockRef.current = true;
       setIsReleasingId(post.id);
 
@@ -223,48 +245,82 @@ export default function App() {
         const media = post.mediaId
           ? mediaLibrary.find((m) => m.id === post.mediaId)
           : undefined;
-        const results: Partial<Record<SocialPlatform, Awaited<ReturnType<typeof publishToSocialPlatform>>>> = {};
+        const newResults: Partial<
+          Record<SocialPlatform, Awaited<ReturnType<typeof publishToSocialPlatform>>>
+        > = {};
 
-        for (const platform of post.platforms) {
-          results[platform] = await publishToSocialPlatform(platform, post.text, creds, {
-            dispatchMode,
+        for (const platform of platformsToRun) {
+          newResults[platform] = await publishToSocialPlatform(platform, post.text, creds, {
+            dispatchMode: platformModes[platform],
             media,
             sourceDocTitle: post.sourceDocTitle,
           });
         }
 
-        const allOk = Object.values(results).every((r) => r?.ok);
+        const mergedResults = {
+          ...(post.results || {}),
+          ...newResults,
+        };
+
+        const activeTargets = post.platforms.filter((p) => platformModes[p] !== 'skip');
+        const succeededPlatforms = platformsToRun.filter((p) => mergedResults[p]?.ok);
+        const failedPlatforms = platformsToRun.filter((p) => !mergedResults[p]?.ok);
+
+        const allActiveSucceeded =
+          activeTargets.length > 0 && activeTargets.every((p) => mergedResults[p]?.ok);
+        const anySucceeded = Object.values(mergedResults).some((r) => r?.ok);
+
+        const nextStatus: QueuePost['status'] = allActiveSucceeded
+          ? 'published'
+          : anySucceeded
+            ? 'partial'
+            : 'failed';
+
         setQueue((prev) =>
           prev.map((item) =>
             item.id === post.id
               ? {
                   ...item,
-                  status: allOk ? 'published' : 'failed',
-                  publishedAt: allOk ? new Date().toISOString() : item.publishedAt,
-                  results,
+                  status: nextStatus,
+                  publishedAt: anySucceeded
+                    ? item.publishedAt || new Date().toISOString()
+                    : item.publishedAt,
+                  results: mergedResults,
                 }
               : item
           )
         );
 
-        if (allOk) {
+        const labels: Record<SocialPlatform, string> = {
+          facebook: 'Facebook',
+          instagram: 'Instagram',
+          twitter: 'X',
+        };
+
+        if (failedPlatforms.length === 0) {
           notify(
-            dispatchMode === 'dry-run'
-              ? `Simulated release of post from ${post.sourceDocTitle}.md to ${post.platforms.join(', ')}.`
-              : dispatchMode === 'webhook'
-                ? `Dispatched post from ${post.sourceDocTitle}.md via Webhook Bridge.`
-                : `Published post from ${post.sourceDocTitle}.md to ${post.platforms.join(', ')}.`
+            `Dispatched post from ${post.sourceDocTitle}.md to ${succeededPlatforms
+              .map((p) => labels[p])
+              .join(', ')}.`
+          );
+        } else if (succeededPlatforms.length > 0) {
+          const firstErr = newResults[failedPlatforms[0]]?.error;
+          notify(
+            `Sent to ${succeededPlatforms.map((p) => labels[p]).join(', ')}. ${failedPlatforms
+              .map((p) => labels[p])
+              .join(', ')} returned an issue: ${firstErr || 'Check Connections.'}`,
+            'error'
           );
         } else {
-          const firstErr = Object.values(results).find((r) => !r?.ok)?.error;
-          notify(firstErr || 'One or more social platforms returned an error.', 'error');
+          const firstErr = newResults[failedPlatforms[0]]?.error;
+          notify(firstErr || 'Channel dispatch returned an error.', 'error');
         }
       } finally {
         setIsReleasingId(null);
         autoReleaseLockRef.current = false;
       }
     },
-    [creds, dispatchMode, mediaLibrary, notify]
+    [creds, mediaLibrary, notify, platformModes]
   );
 
   // Live clock + automated interval / scheduled-time release loop
@@ -275,8 +331,14 @@ export default function App() {
 
       if (autoReleaseLockRef.current) return;
 
+      const autoEligible = sortedPending.filter(
+        (p) =>
+          (p.status === 'queued' || p.status === 'scheduled') &&
+          p.platforms.some((plat) => platformModes[plat] !== 'skip' && !p.results?.[plat]?.ok)
+      );
+
       // 1. Check per-post explicit scheduledAt timestamps first
-      const dueSpecific = sortedPending.find(
+      const dueSpecific = autoEligible.find(
         (p) => p.scheduledAt && new Date(p.scheduledAt).getTime() <= now.getTime()
       );
       if (dueSpecific) {
@@ -285,10 +347,10 @@ export default function App() {
       }
 
       // 2. Check global Auto-Release scheduler
-      if (!schedule.enabled || sortedPending.length === 0) return;
+      if (!schedule.enabled || autoEligible.length === 0) return;
       if (!isWithinActiveWindow(schedule, now)) return;
 
-      const nextHead = sortedPending[0];
+      const nextHead = autoEligible[0];
       if (!nextHead) return;
 
       if (schedule.mode === 'interval') {
@@ -327,7 +389,7 @@ export default function App() {
     }, 1000);
 
     return () => window.clearInterval(id);
-  }, [schedule, sortedPending, executeSinglePostRelease]);
+  }, [schedule, sortedPending, executeSinglePostRelease, platformModes]);
 
   const nextTargetDate = useMemo(
     () => computeNextSlotDate(schedule, nowTick),
@@ -575,7 +637,7 @@ export default function App() {
 
   const handleReleaseHeadClick = () => {
     if (sortedPending.length === 0) return;
-    setConfirmPost(sortedPending[0]);
+    setConfirmRequest({ post: sortedPending[0] });
   };
 
   return (
@@ -615,7 +677,7 @@ export default function App() {
             instagram: Boolean(creds.instagramUserId && creds.facebookPageToken),
             twitter: Boolean(creds.twitterAccessToken),
           }}
-          dispatchMode={dispatchMode}
+          platformModes={platformModes}
         />
 
         <main className="flex-1 p-5 sm:p-8 max-w-6xl w-full mx-auto">
@@ -645,7 +707,7 @@ export default function App() {
               queue={queue}
               mediaLibrary={mediaLibrary}
               creds={creds}
-              dispatchMode={dispatchMode}
+              platformModes={platformModes}
               isReleasingId={isReleasingId}
               onUpdatePost={(id, patch) =>
                 setQueue((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)))
@@ -654,7 +716,9 @@ export default function App() {
               onDeletePost={(id) =>
                 setQueue((prev) => prev.filter((p) => p.id !== id))
               }
-              onRequestRelease={(post) => setConfirmPost(post)}
+              onRequestRelease={(post, onlyPlatforms) =>
+                setConfirmRequest({ post, onlyPlatforms })
+              }
               onNavigateTab={(tab) => setActiveTab(tab)}
             />
           )}
@@ -778,16 +842,10 @@ export default function App() {
             <ConnectionsView
               creds={creds}
               onUpdateCreds={(patch) => setCreds((prev) => ({ ...prev, ...patch }))}
-              dispatchMode={dispatchMode}
-              onChangeDispatchMode={(mode) => {
-                setDispatchMode(mode);
-                notify(
-                  mode === 'dry-run'
-                    ? 'Switched to Payload Dry-Run simulation mode.'
-                    : mode === 'webhook'
-                      ? 'Switched to Webhook Bridge dispatch mode.'
-                      : 'Switched to Live Official Social APIs mode.'
-                );
+              platformModes={platformModes}
+              onUpdatePlatformModes={(next) => {
+                setPlatformModes(next);
+                notify('Updated independent channel dispatch modes.');
               }}
               onNotify={notify}
             />
@@ -796,17 +854,18 @@ export default function App() {
       </div>
 
       <ConfirmReleaseModal
-        post={confirmPost}
+        post={confirmRequest?.post || null}
+        onlyPlatforms={confirmRequest?.onlyPlatforms}
         media={
-          confirmPost?.mediaId
-            ? mediaLibrary.find((m) => m.id === confirmPost.mediaId)
+          confirmRequest?.post.mediaId
+            ? mediaLibrary.find((m) => m.id === confirmRequest.post.mediaId)
             : undefined
         }
-        dispatchMode={dispatchMode}
-        onCancel={() => setConfirmPost(null)}
-        onConfirm={(post) => {
-          setConfirmPost(null);
-          void executeSinglePostRelease(post);
+        platformModes={platformModes}
+        onCancel={() => setConfirmRequest(null)}
+        onConfirm={(post, targetPlatforms) => {
+          setConfirmRequest(null);
+          void executeSinglePostRelease(post, targetPlatforms);
         }}
       />
     </div>

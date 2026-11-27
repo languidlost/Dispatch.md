@@ -1,6 +1,11 @@
 import React, { useState } from 'react';
 import { Check, Copy, ExternalLink, KeyRound, ShieldCheck, Webhook } from 'lucide-react';
-import { DispatchMode, SocialCredentialsMemory } from '../types';
+import {
+  PlatformDispatchConfig,
+  PlatformDispatchMode,
+  SocialCredentialsMemory,
+  SocialPlatform,
+} from '../types';
 import {
   FacebookManagedPage,
   fetchMetaManagedPages,
@@ -14,8 +19,8 @@ import {
 interface ConnectionsViewProps {
   creds: SocialCredentialsMemory;
   onUpdateCreds: (patch: Partial<SocialCredentialsMemory>) => void;
-  dispatchMode: DispatchMode;
-  onChangeDispatchMode: (mode: DispatchMode) => void;
+  platformModes: PlatformDispatchConfig;
+  onUpdatePlatformModes: (next: PlatformDispatchConfig) => void;
   onNotify: (msg: string, type?: 'info' | 'error') => void;
 }
 
@@ -46,11 +51,24 @@ const CLOUDFLARE_WORKER_SNIPPET = `export default {
   },
 };`;
 
+const CHANNEL_META: Array<{ id: SocialPlatform; label: string; hint: string }> = [
+  { id: 'facebook', label: 'Facebook Page', hint: 'Meta Graph API v21.0 or Webhook' },
+  { id: 'instagram', label: 'Instagram Business', hint: 'Meta Graph API v21.0 or Webhook' },
+  { id: 'twitter', label: 'X (Twitter)', hint: 'X API v2, Webhook, or Skip/Manual Composer' },
+];
+
+const MODE_OPTIONS: Array<{ id: PlatformDispatchMode; label: string }> = [
+  { id: 'official', label: 'Live Official API' },
+  { id: 'webhook', label: 'Webhook Bridge' },
+  { id: 'dry-run', label: 'Dry-Run' },
+  { id: 'skip', label: 'Skip / Manual' },
+];
+
 export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
   creds,
   onUpdateCreds,
-  dispatchMode,
-  onChangeDispatchMode,
+  platformModes,
+  onUpdatePlatformModes,
   onNotify,
 }) => {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -115,17 +133,23 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
           instagramUsername:
             first.instagram_business_account?.username || creds.instagramUsername,
         });
-        onNotify(`Loaded ${pages.length} Facebook Page(s) from Graph API v21.0.`);
+        onNotify(
+          `Loaded ${pages.length} Facebook Page(s) and stored the Page Access Token for "${first.name}".`
+        );
       } else if (creds.facebookPageId.trim()) {
         const page = await testFacebookPageConnection(
           creds.facebookPageId,
           creds.facebookPageToken
         );
-        onUpdateCreds({ facebookPageName: page.name });
-        onNotify(`Verified Page token directly for "${page.name}".`);
+        onUpdateCreds({
+          facebookPageId: page.id,
+          facebookPageName: page.name,
+          facebookPageToken: page.pageToken,
+        });
+        onNotify(`Verified Page token for "${page.name}".`);
       } else {
         onNotify(
-          'Token is valid, or if using a direct Page Token, enter your Facebook Page ID below and click Test Page.',
+          'No managed Facebook Pages were returned for this token. In Graph API Explorer, set "User or Page" to "Get Page Access Token" and pick your Page (with pages_manage_posts & pages_show_list).',
           'error'
         );
       }
@@ -147,8 +171,12 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
         creds.facebookPageId,
         creds.facebookPageToken
       );
-      onUpdateCreds({ facebookPageName: page.name });
-      onNotify(`Verified Facebook Page "${page.name}" (${page.id}).`);
+      onUpdateCreds({
+        facebookPageId: page.id,
+        facebookPageName: page.name,
+        facebookPageToken: page.pageToken,
+      });
+      onNotify(`Verified Facebook Page "${page.name}" (${page.id}) with a valid Page Access Token.`);
     } catch (err) {
       onNotify(err instanceof Error ? err.message : 'Facebook Page check failed.', 'error');
     } finally {
@@ -192,7 +220,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
       const raw = err instanceof Error ? err.message : 'Failed to verify X token.';
       onNotify(
         raw.toLowerCase().includes('failed to fetch')
-          ? 'Browser blocked direct fetch to api.x.com (CORS). Add a Cloudflare Worker CORS Relay URL below or use Webhook Bridge mode.'
+          ? 'Browser blocked direct fetch to api.x.com (CORS). Add a Cloudflare Worker CORS Relay URL below or set X to Webhook / Skip.'
           : raw,
         'error'
       );
@@ -240,43 +268,86 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
           Social Connections &amp; Static Hosting
         </h1>
         <p className="text-sm text-slate-600 mt-1">
-          Choose the connection method that fits your setup: direct Graph tokens (no OAuth redirect needed), X CORS Relay / Composer, popup OAuth, or an automation webhook bridge.
+          Facebook, Instagram, and X operate independently. You can publish Meta posts live while routing X to Webhook Bridge, Manual Composer, or Skip without blocking any release.
         </p>
       </div>
 
-      {/* Dispatch Mode Selector */}
-      <section className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      {/* Independent Per-Channel Dispatch Routing */}
+      <section className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-3">
           <div>
             <h2 className="font-display text-base font-semibold text-slate-900">
-              Dispatch Execution Mode
+              Independent Channel Dispatch Modes
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              Select how queued posts are sent when released individually or on schedule.
+              Each platform runs separately—if X fails or is skipped, Facebook and Instagram still publish cleanly.
             </p>
           </div>
-          <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg shrink-0">
-            {(
-              [
-                { id: 'dry-run', label: 'Payload Dry-Run' },
-                { id: 'official', label: 'Live Official APIs' },
-                { id: 'webhook', label: 'Webhook Bridge' },
-              ] as const
-            ).map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                onClick={() => onChangeDispatchMode(opt.id)}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md cursor-pointer whitespace-nowrap ${
-                  dispatchMode === opt.id
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                onUpdatePlatformModes({
+                  facebook: 'official',
+                  instagram: 'official',
+                  twitter: 'skip',
+                });
+                onNotify('Set Facebook & Instagram to Live Official API, and X to Skip / Manual.');
+              }}
+              className="px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-md cursor-pointer whitespace-nowrap"
+            >
+              Meta Live + Skip X
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                onUpdatePlatformModes({
+                  facebook: 'dry-run',
+                  instagram: 'dry-run',
+                  twitter: 'dry-run',
+                });
+                onNotify('Set all channels to Dry-Run simulation mode.');
+              }}
+              className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md cursor-pointer whitespace-nowrap"
+            >
+              All Dry-Run
+            </button>
           </div>
+        </div>
+
+        <div className="divide-y divide-slate-200">
+          {CHANNEL_META.map((ch) => (
+            <div
+              key={ch.id}
+              className="py-3 first:pt-0 last:pb-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+            >
+              <div>
+                <div className="text-sm font-medium text-slate-900">{ch.label}</div>
+                <div className="text-xs text-slate-500">{ch.hint}</div>
+              </div>
+              <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg shrink-0">
+                {MODE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() =>
+                      onUpdatePlatformModes({
+                        ...platformModes,
+                        [ch.id]: opt.id,
+                      })
+                    }
+                    className={`px-2.5 py-1 text-xs font-medium rounded-md cursor-pointer whitespace-nowrap ${
+                      platformModes[ch.id] === opt.id
+                        ? 'bg-white text-slate-900 shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
       </section>
 
@@ -323,7 +394,9 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                 {copiedKey === 'meta-perms' ? 'Copied' : 'Copy permissions'}
               </button>
             </li>
-            <li>Click <strong>Generate Access Token</strong> and approve your Page &amp; linked Instagram Business account.</li>
+            <li>
+              Click <strong>Generate Access Token</strong>, then under the <strong>User or Page</strong> dropdown switch from User Token to <strong>your Facebook Page</strong> (Page Access Token). Using a User Token or personal profile ID causes Meta&apos;s deprecated <code className="font-mono">publish_actions</code> error.
+            </li>
             <li>Paste the token below and click <strong>Load Pages &amp; Instagram</strong>.</li>
           </ol>
         </div>
@@ -331,13 +404,13 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
           <div className="md:col-span-8">
             <label className="block text-xs font-medium text-slate-700 mb-1">
-              Session Graph API User or Page Access Token (In-Memory Only)
+              Session Graph API Page Access Token (or User Token with Page Permissions — In-Memory Only)
             </label>
             <input
               type="password"
               value={creds.facebookPageToken}
               onChange={(e) => onUpdateCreds({ facebookPageToken: e.target.value })}
-              placeholder="Paste token from Meta Graph API Explorer..."
+              placeholder="Paste Page Access Token from Meta Graph API Explorer..."
               className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-lg"
             />
           </div>
@@ -629,10 +702,16 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
           <button
             type="button"
             disabled={!creds.webhookUrl}
-            onClick={() => onChangeDispatchMode('webhook')}
+            onClick={() => {
+              onUpdatePlatformModes({
+                ...platformModes,
+                twitter: 'webhook',
+              });
+              onNotify('Routed X (Twitter) to Webhook Bridge without changing Facebook or Instagram.');
+            }}
             className="px-4 py-2 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg disabled:bg-slate-200 disabled:text-slate-500 cursor-pointer whitespace-nowrap"
           >
-            Activate Webhook Mode
+            Route X to Webhook
           </button>
         </div>
       </section>

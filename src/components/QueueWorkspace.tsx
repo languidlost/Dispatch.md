@@ -12,8 +12,8 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import {
-  DispatchMode,
   MediaAsset,
+  PlatformDispatchConfig,
   QueuePost,
   SocialCredentialsMemory,
   SocialPlatform,
@@ -26,12 +26,12 @@ interface QueueWorkspaceProps {
   queue: QueuePost[];
   mediaLibrary: MediaAsset[];
   creds: SocialCredentialsMemory;
-  dispatchMode: DispatchMode;
+  platformModes: PlatformDispatchConfig;
   isReleasingId: string | null;
   onUpdatePost: (id: string, patch: Partial<QueuePost>) => void;
   onMovePost: (id: string, direction: 'up' | 'down') => void;
   onDeletePost: (id: string) => void;
-  onRequestRelease: (post: QueuePost) => void;
+  onRequestRelease: (post: QueuePost, onlyPlatforms?: SocialPlatform[]) => void;
   onNavigateTab: (tab: 'repository' | 'rules' | 'media') => void;
 }
 
@@ -45,7 +45,7 @@ export const QueueWorkspace: React.FC<QueueWorkspaceProps> = ({
   queue,
   mediaLibrary,
   creds,
-  dispatchMode,
+  platformModes,
   isReleasingId,
   onUpdatePost,
   onMovePost,
@@ -107,9 +107,9 @@ export const QueueWorkspace: React.FC<QueueWorkspaceProps> = ({
       activePost.text,
       creds,
       activeMedia,
-      dispatchMode
+      platformModes[activePreviewPlatform]
     );
-  }, [activePost, activePreviewPlatform, creds, activeMedia, dispatchMode]);
+  }, [activePost, activePreviewPlatform, creds, activeMedia, platformModes]);
 
   const togglePlatform = (post: QueuePost, platform: SocialPlatform) => {
     const has = post.platforms.includes(platform);
@@ -226,20 +226,24 @@ export const QueueWorkspace: React.FC<QueueWorkspaceProps> = ({
                         className={
                           post.status === 'published'
                             ? 'text-emerald-700 font-medium'
-                            : post.status === 'failed'
-                              ? 'text-red-700 font-medium'
-                              : post.status === 'scheduled'
-                                ? 'text-blue-700 font-medium'
-                                : 'text-slate-600'
+                            : post.status === 'partial'
+                              ? 'text-amber-700 font-medium'
+                              : post.status === 'failed'
+                                ? 'text-red-700 font-medium'
+                                : post.status === 'scheduled'
+                                  ? 'text-blue-700 font-medium'
+                                  : 'text-slate-600'
                         }
                       >
                         {post.status === 'published'
                           ? 'Published'
-                          : post.status === 'failed'
-                            ? 'Attention needed'
-                            : post.status === 'scheduled'
-                              ? 'Scheduled'
-                              : 'Queued'}
+                          : post.status === 'partial'
+                            ? 'Partially sent'
+                            : post.status === 'failed'
+                              ? 'Attention needed'
+                              : post.status === 'scheduled'
+                                ? 'Scheduled'
+                                : 'Queued'}
                       </span>
                     </div>
 
@@ -297,9 +301,11 @@ export const QueueWorkspace: React.FC<QueueWorkspaceProps> = ({
                     className="mt-3 pt-2.5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3"
                     onClick={(e) => e.stopPropagation()}
                   >
-                    <div className="flex items-center gap-3 text-xs">
+                    <div className="flex flex-wrap items-center gap-3 text-xs">
                       {(['twitter', 'facebook', 'instagram'] as SocialPlatform[]).map((p) => {
                         const checked = post.platforms.includes(p);
+                        const res = post.results?.[p];
+                        const isSkipped = platformModes[p] === 'skip';
                         return (
                           <label
                             key={p}
@@ -308,11 +314,19 @@ export const QueueWorkspace: React.FC<QueueWorkspaceProps> = ({
                             <input
                               type="checkbox"
                               checked={checked}
-                              disabled={post.status === 'published'}
+                              disabled={post.status === 'published' || Boolean(res?.ok)}
                               onChange={() => togglePlatform(post, p)}
                               className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
                             />
-                            <span>{PLATFORM_LABELS[p]}</span>
+                            <span className={isSkipped && checked ? 'text-slate-400 line-through' : ''}>
+                              {PLATFORM_LABELS[p]}
+                            </span>
+                            {res?.ok && (
+                              <span className="text-emerald-700 font-medium">✓</span>
+                            )}
+                            {res && !res.ok && (
+                              <span className="text-red-600 font-medium">!</span>
+                            )}
                           </label>
                         );
                       })}
@@ -328,12 +342,23 @@ export const QueueWorkspace: React.FC<QueueWorkspaceProps> = ({
                     {post.status !== 'published' ? (
                       <button
                         type="button"
-                        disabled={isBusy || post.platforms.length === 0}
+                        disabled={
+                          isBusy ||
+                          !post.platforms.some(
+                            (p) => platformModes[p] !== 'skip' && !post.results?.[p]?.ok
+                          )
+                        }
                         onClick={() => onRequestRelease(post)}
                         className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors cursor-pointer disabled:opacity-40 whitespace-nowrap"
                       >
                         <Send className="w-3 h-3" />
-                        <span>{isBusy ? 'Sending...' : 'Release'}</span>
+                        <span>
+                          {isBusy
+                            ? 'Sending...'
+                            : post.status === 'partial'
+                              ? 'Release Remaining'
+                              : 'Release'}
+                        </span>
                       </button>
                     ) : (
                       <span className="inline-flex items-center gap-1 text-xs text-emerald-700 font-medium">
@@ -569,21 +594,77 @@ export const QueueWorkspace: React.FC<QueueWorkspaceProps> = ({
                 )}
 
                 {activePost.status !== 'published' && (
-                  <button
-                    type="button"
-                    disabled={isReleasingId === activePost.id || activePost.platforms.length === 0}
-                    onClick={() => onRequestRelease(activePost)}
-                    className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-500 transition-colors cursor-pointer"
-                  >
-                    <Send className="w-4 h-4" />
-                    <span>
-                      {dispatchMode === 'dry-run'
-                        ? 'Simulate Release of This Post'
-                        : dispatchMode === 'webhook'
-                          ? 'Dispatch via Webhook Bridge'
-                          : 'Release This Post Now'}
-                    </span>
-                  </button>
+                  <div className="space-y-2.5">
+                    {activePost.platforms.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        {activePost.platforms.map((p) => {
+                          const alreadySent = Boolean(activePost.results?.[p]?.ok);
+                          const isSkipped = platformModes[p] === 'skip';
+                          if (alreadySent) {
+                            return (
+                              <span
+                                key={p}
+                                className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg"
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                                <span>{PLATFORM_LABELS[p]} Sent</span>
+                              </span>
+                            );
+                          }
+                          if (isSkipped) {
+                            return (
+                              <span
+                                key={p}
+                                className="inline-flex items-center px-2.5 py-1.5 text-xs text-slate-500 bg-slate-100 border border-slate-200 rounded-lg"
+                              >
+                                {PLATFORM_LABELS[p]} Skipped
+                              </span>
+                            );
+                          }
+                          return (
+                            <button
+                              key={p}
+                              type="button"
+                              disabled={isReleasingId === activePost.id}
+                              onClick={() => onRequestRelease(activePost, [p])}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:border-blue-400 hover:text-blue-700 rounded-lg transition-colors cursor-pointer disabled:opacity-40 whitespace-nowrap"
+                            >
+                              <Send className="w-3 h-3" />
+                              <span>Send {PLATFORM_LABELS[p]} Only</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {(() => {
+                      const remainingActive = activePost.platforms.filter(
+                        (p) => platformModes[p] !== 'skip' && !activePost.results?.[p]?.ok
+                      );
+                      const hasPartialOrSkip =
+                        activePost.status === 'partial' ||
+                        activePost.platforms.some((p) => platformModes[p] === 'skip');
+                      return (
+                        <button
+                          type="button"
+                          disabled={
+                            isReleasingId === activePost.id || remainingActive.length === 0
+                          }
+                          onClick={() => onRequestRelease(activePost)}
+                          className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-500 transition-colors cursor-pointer"
+                        >
+                          <Send className="w-4 h-4" />
+                          <span>
+                            {remainingActive.length === 0
+                              ? 'No Active Unsent Channels'
+                              : hasPartialOrSkip
+                                ? `Release Remaining (${remainingActive.map((p) => PLATFORM_LABELS[p]).join(', ')})`
+                                : 'Release This Post Now'}
+                          </span>
+                        </button>
+                      );
+                    })()}
+                  </div>
                 )}
               </div>
             </div>

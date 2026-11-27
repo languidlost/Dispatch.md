@@ -85,7 +85,7 @@ export interface QueuePost {
   ruleName: string;
   platforms: SocialPlatform[];
   mediaId?: string;
-  status: 'queued' | 'scheduled' | 'publishing' | 'published' | 'failed';
+  status: 'queued' | 'scheduled' | 'publishing' | 'partial' | 'published' | 'failed';
   scheduledAt?: string;
   publishedAt?: string;
   order: number;
@@ -115,6 +115,10 @@ export interface DriveFolderLink {
 }
 
 export type DispatchMode = 'dry-run' | 'official' | 'webhook';
+
+export type PlatformDispatchMode = DispatchMode | 'skip';
+
+export type PlatformDispatchConfig = Record<SocialPlatform, PlatformDispatchMode>;
 
 export interface SocialCredentialsMemory {
   facebookPageId: string;

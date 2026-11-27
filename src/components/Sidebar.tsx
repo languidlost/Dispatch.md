@@ -11,7 +11,7 @@ import {
   Scissors,
   X,
 } from 'lucide-react';
-import { ScheduleConfig, WorkspaceTab } from '../types';
+import { PlatformDispatchConfig, ScheduleConfig, WorkspaceTab } from '../types';
 
 interface SidebarProps {
   activeTab: WorkspaceTab;
@@ -31,7 +31,7 @@ interface SidebarProps {
     instagram: boolean;
     twitter: boolean;
   };
-  dispatchMode: 'dry-run' | 'official' | 'webhook';
+  platformModes: PlatformDispatchConfig;
 }
 
 const SIDEBAR_ITEMS: Array<{
@@ -54,7 +54,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   countdownText,
   stats,
   connectedSummary,
-  dispatchMode,
+  platformModes,
 }) => {
   const [newTimeInput, setNewTimeInput] = useState('12:00');
 
@@ -275,39 +275,75 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Account & Mode Summary */}
       <div className="p-4 border-t border-slate-200 bg-slate-50/70 space-y-2 text-xs text-slate-600">
         <div className="flex items-center justify-between">
-          <span>Dispatch Mode</span>
+          <span>Facebook</span>
           <span
             className={
-              dispatchMode === 'dry-run'
-                ? 'font-medium text-amber-700'
-                : 'font-medium text-emerald-700'
+              platformModes.facebook === 'official' && connectedSummary.facebook
+                ? 'font-medium text-emerald-700'
+                : platformModes.facebook === 'skip'
+                  ? 'text-slate-400'
+                  : 'font-medium text-slate-700'
             }
           >
-            {dispatchMode === 'dry-run'
-              ? 'Payload Dry-Run'
-              : dispatchMode === 'webhook'
-                ? 'Webhook Bridge'
-                : 'Live Social APIs'}
+            {platformModes.facebook === 'official'
+              ? connectedSummary.facebook
+                ? 'Live API'
+                : 'Live (No token)'
+              : platformModes.facebook === 'webhook'
+                ? 'Webhook'
+                : platformModes.facebook === 'skip'
+                  ? 'Skipped'
+                  : 'Dry-Run'}
           </span>
         </div>
         <div className="flex items-center justify-between">
+          <span>Instagram</span>
+          <span
+            className={
+              platformModes.instagram === 'official' && connectedSummary.instagram
+                ? 'font-medium text-emerald-700'
+                : platformModes.instagram === 'skip'
+                  ? 'text-slate-400'
+                  : 'font-medium text-slate-700'
+            }
+          >
+            {platformModes.instagram === 'official'
+              ? connectedSummary.instagram
+                ? 'Live API'
+                : 'Live (No token)'
+              : platformModes.instagram === 'webhook'
+                ? 'Webhook'
+                : platformModes.instagram === 'skip'
+                  ? 'Skipped'
+                  : 'Dry-Run'}
+          </span>
+        </div>
+        <div className="flex items-center justify-between">
+          <span>X (Twitter)</span>
+          <span
+            className={
+              platformModes.twitter === 'official' && connectedSummary.twitter
+                ? 'font-medium text-emerald-700'
+                : platformModes.twitter === 'skip'
+                  ? 'text-slate-400'
+                  : 'font-medium text-slate-700'
+            }
+          >
+            {platformModes.twitter === 'official'
+              ? connectedSummary.twitter
+                ? 'Live API'
+                : 'Live (No token)'
+              : platformModes.twitter === 'webhook'
+                ? 'Webhook'
+                : platformModes.twitter === 'skip'
+                  ? 'Manual / Skip'
+                  : 'Dry-Run'}
+          </span>
+        </div>
+        <div className="flex items-center justify-between pt-1 border-t border-slate-200/70">
           <span>Google Drive</span>
           <span className={connectedSummary.google ? 'text-emerald-700 font-medium' : 'text-slate-500'}>
             {connectedSummary.google ? 'Connected' : 'Signed out'}
-          </span>
-        </div>
-        <div className="flex items-center justify-between">
-          <span>Social Channels</span>
-          <span className="font-mono tabular-nums text-slate-800">
-            {dispatchMode === 'webhook'
-              ? 'Webhook'
-              : [
-                  connectedSummary.facebook ? 'FB' : null,
-                  connectedSummary.instagram ? 'IG' : null,
-                  connectedSummary.twitter ? 'X' : null,
-                ]
-                  .filter(Boolean)
-                  .join(' · ') || 'None'}
           </span>
         </div>
       </div>

@@ -1,30 +1,44 @@
 import React from 'react';
 import { AlertTriangle, Send, X } from 'lucide-react';
-import { DispatchMode, MediaAsset, QueuePost } from '../types';
+import { MediaAsset, PlatformDispatchConfig, QueuePost, SocialPlatform } from '../types';
 import { getCharDiagnostics } from '../services/snipEngine';
 
 interface ConfirmReleaseModalProps {
   post: QueuePost | null;
+  onlyPlatforms?: SocialPlatform[];
   media?: MediaAsset;
-  dispatchMode: DispatchMode;
+  platformModes: PlatformDispatchConfig;
   onCancel: () => void;
-  onConfirm: (post: QueuePost) => void;
+  onConfirm: (post: QueuePost, targetPlatforms: SocialPlatform[]) => void;
 }
+
+const LABELS: Record<SocialPlatform, string> = {
+  facebook: 'Facebook',
+  instagram: 'Instagram',
+  twitter: 'X',
+};
 
 export const ConfirmReleaseModal: React.FC<ConfirmReleaseModalProps> = ({
   post,
+  onlyPlatforms,
   media,
-  dispatchMode,
+  platformModes,
   onCancel,
   onConfirm,
 }) => {
   if (!post) return null;
 
-  const diagnostics = getCharDiagnostics(post.text, post.platforms);
+  const targetPlatforms = (onlyPlatforms || post.platforms).filter((p) => {
+    if (platformModes[p] === 'skip') return false;
+    if (!onlyPlatforms && post.results?.[p]?.ok) return false;
+    return true;
+  });
+
+  const diagnostics = getCharDiagnostics(post.text, targetPlatforms);
   const hasOverLimit = diagnostics.some((d) => d.overLimit);
   const needsPublicUrlForIg =
-    dispatchMode === 'official' &&
-    post.platforms.includes('instagram') &&
+    targetPlatforms.includes('instagram') &&
+    platformModes.instagram === 'official' &&
     (!media || !media.publicUrl);
 
   return (
@@ -37,11 +51,7 @@ export const ConfirmReleaseModal: React.FC<ConfirmReleaseModalProps> = ({
       <div className="w-full max-w-lg bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden">
         <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
           <h2 id="confirm-release-title" className="font-display text-base font-semibold text-slate-900">
-            {dispatchMode === 'dry-run'
-              ? 'Simulate Single-Post Release'
-              : dispatchMode === 'webhook'
-                ? 'Confirm Webhook Bridge Dispatch'
-                : 'Confirm Live Social Release'}
+            Confirm Single-Post Release
           </h2>
           <button
             type="button"
@@ -55,25 +65,37 @@ export const ConfirmReleaseModal: React.FC<ConfirmReleaseModalProps> = ({
 
         <div className="p-6 space-y-4">
           <p className="text-sm text-slate-600">
-            {dispatchMode === 'dry-run'
-              ? 'Payload Dry-Run mode is active. This will simulate sending one post and log the exact official API endpoints without publishing externally.'
-              : dispatchMode === 'webhook'
-                ? 'Webhook Bridge mode is active. This will send the post JSON payload to your configured automation webhook.'
-                : 'This will immediately publish this single post through the configured official public APIs.'}
+            Each selected channel dispatches independently according to its own mode—one channel failing or skipped will never block another.
           </p>
 
           <div className="border border-slate-200 rounded-lg p-3.5 bg-slate-50 text-sm text-slate-800 whitespace-pre-wrap max-h-44 overflow-y-auto">
             {post.text}
           </div>
 
-          <div className="text-xs text-slate-600 flex flex-wrap items-center gap-2">
-            <span className="font-medium text-slate-800">Targets:</span>
-            <span>{post.platforms.join(' · ') || 'None selected'}</span>
+          <div className="space-y-1.5 text-xs text-slate-600">
+            <div className="font-medium text-slate-800">Channels in this release:</div>
+            {targetPlatforms.length === 0 ? (
+              <p className="text-amber-800">
+                No active un-published channels remain on this post (channels set to Skip or already published are excluded).
+              </p>
+            ) : (
+              <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg">
+                {targetPlatforms.map((plat) => (
+                  <div key={plat} className="px-3 py-2 flex items-center justify-between">
+                    <span className="font-medium text-slate-900">{LABELS[plat]}</span>
+                    <span className="font-mono text-slate-600">
+                      {platformModes[plat] === 'official'
+                        ? 'Live Official API'
+                        : platformModes[plat] === 'webhook'
+                          ? 'Webhook Bridge'
+                          : 'Payload Dry-Run'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
             {media && (
-              <>
-                <span aria-hidden="true">·</span>
-                <span>Image: {media.name}</span>
-              </>
+              <div className="pt-1 text-slate-500">Attached photo: {media.name}</div>
             )}
           </div>
 
@@ -106,18 +128,12 @@ export const ConfirmReleaseModal: React.FC<ConfirmReleaseModalProps> = ({
           </button>
           <button
             type="button"
-            onClick={() => onConfirm(post)}
-            disabled={post.platforms.length === 0}
+            onClick={() => onConfirm(post, targetPlatforms)}
+            disabled={targetPlatforms.length === 0}
             className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:bg-slate-300 cursor-pointer"
           >
             <Send className="w-4 h-4" />
-            <span>
-              {dispatchMode === 'dry-run'
-                ? 'Run Simulation'
-                : dispatchMode === 'webhook'
-                  ? 'Send via Webhook'
-                  : 'Publish Post Now'}
-            </span>
+            <span>Dispatch ({targetPlatforms.length})</span>
           </button>
         </div>
       </div>

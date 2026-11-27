@@ -1,6 +1,6 @@
 import {
-  DispatchMode,
   MediaAsset,
+  PlatformDispatchMode,
   PublishAttemptResult,
   SocialCredentialsMemory,
   SocialPlatform,
@@ -249,9 +249,29 @@ export async function startMetaGraphOAuth(appId: string): Promise<{
 export async function fetchMetaManagedPages(
   userOrPageToken: string
 ): Promise<FacebookManagedPage[]> {
+  const token = userOrPageToken.trim();
+  // First inspect /me to detect whether the pasted token is already a Page Access Token or a User Token
+  const meRes = await fetch(
+    `https://graph.facebook.com/v21.0/me?fields=id,name,category,instagram_business_account{id,username}&access_token=${encodeURIComponent(
+      token
+    )}`
+  );
+  const meJson = await meRes.json().catch(() => ({}));
+  if (meRes.ok && !meJson.error && meJson.category) {
+    // Token is already a Page Access Token (/me resolves directly to the Page node)
+    return [
+      {
+        id: meJson.id,
+        name: meJson.name,
+        access_token: token,
+        instagram_business_account: meJson.instagram_business_account,
+      },
+    ];
+  }
+
   const res = await fetch(
     `https://graph.facebook.com/v21.0/me/accounts?fields=id,name,access_token,instagram_business_account{id,username}&access_token=${encodeURIComponent(
-      userOrPageToken
+      token
     )}`
   );
   if (!res.ok) {
@@ -262,20 +282,107 @@ export async function fetchMetaManagedPages(
   return json.data || [];
 }
 
+export async function resolveFacebookPageTarget(
+  pageId: string,
+  userOrPageToken: string
+): Promise<{ pageId: string; pageToken: string; pageName?: string }> {
+  const cleanId = pageId.trim();
+  const cleanToken = userOrPageToken.trim();
+
+  // Check what node /me resolves to for this token
+  const meRes = await fetch(
+    `https://graph.facebook.com/v21.0/me?fields=id,name,category&access_token=${encodeURIComponent(
+      cleanToken
+    )}`
+  );
+  const meJson = await meRes.json().catch(() => ({}));
+
+  if (meRes.ok && !meJson.error && meJson.category) {
+    // Already a Page Access Token
+    if (cleanId && cleanId !== meJson.id) {
+      const targetRes = await fetch(
+        `https://graph.facebook.com/v21.0/${encodeURIComponent(
+          cleanId
+        )}?metadata=1&fields=id,name&access_token=${encodeURIComponent(cleanToken)}`
+      );
+      const targetJson = await targetRes.json().catch(() => ({}));
+      if (targetJson?.metadata?.type === 'user') {
+        throw new Error(
+          `ID "${cleanId}" is a personal Facebook User profile, not a Facebook Page. Meta retired publish_actions (personal timeline posting)—use your Facebook Page ID (${meJson.id}) instead.`
+        );
+      }
+    }
+    return {
+      pageId: cleanId || meJson.id,
+      pageToken: cleanToken,
+      pageName: meJson.name,
+    };
+  }
+
+  // Otherwise the token is likely a User Access Token: inspect target ID & exchange for a Page Access Token
+  if (cleanId) {
+    const targetRes = await fetch(
+      `https://graph.facebook.com/v21.0/${encodeURIComponent(
+        cleanId
+      )}?metadata=1&fields=id,name,category,access_token&access_token=${encodeURIComponent(
+        cleanToken
+      )}`
+    );
+    const targetJson = await targetRes.json().catch(() => ({}));
+    if (targetRes.ok && !targetJson.error) {
+      if (targetJson.metadata?.type === 'user' || (!targetJson.category && targetJson.id === meJson?.id)) {
+        throw new Error(
+          `Facebook ID "${cleanId}" belongs to your personal profile, not a Facebook Page. Meta deprecated publish_actions (posting to personal timelines). Select a Facebook Page via "Load Pages & Instagram" instead.`
+        );
+      }
+      if (targetJson.access_token) {
+        return {
+          pageId: targetJson.id || cleanId,
+          pageToken: targetJson.access_token,
+          pageName: targetJson.name,
+        };
+      }
+    }
+  }
+
+  // Try /me/accounts to obtain the Page Access Token
+  const accountsRes = await fetch(
+    `https://graph.facebook.com/v21.0/me/accounts?fields=id,name,access_token&access_token=${encodeURIComponent(
+      cleanToken
+    )}`
+  );
+  const accountsJson = await accountsRes.json().catch(() => ({}));
+  const pages: FacebookManagedPage[] = accountsJson?.data || [];
+  const matched = cleanId ? pages.find((p) => p.id === cleanId) : pages[0];
+  if (matched?.access_token) {
+    return {
+      pageId: matched.id,
+      pageToken: matched.access_token,
+      pageName: matched.name,
+    };
+  }
+
+  if (!cleanId && pages.length === 0) {
+    throw new Error(
+      'You entered a User Access Token, but Meta returned 0 managed Pages. In Graph API Explorer, switch "User or Page" to "Get Page Access Token" for your Facebook Page (with pages_manage_posts & pages_show_list), then click Load Pages & Instagram.'
+    );
+  }
+
+  throw new Error(
+    'A Facebook Page Access Token is required (User Access Tokens trigger the deprecated publish_actions error). In Graph API Explorer, select "Get Page Access Token" under "User or Page" and paste that Page token here.'
+  );
+}
+
 export async function testFacebookPageConnection(
   pageId: string,
   pageToken: string
-): Promise<{ id: string; name: string }> {
-  const res = await fetch(
-    `https://graph.facebook.com/v21.0/${encodeURIComponent(
-      pageId.trim()
-    )}?fields=id,name&access_token=${encodeURIComponent(pageToken.trim())}`
-  );
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok || json.error) {
-    throw new Error(json?.error?.message || `Facebook Page check failed (${res.status})`);
-  }
-  return { id: json.id, name: json.name };
+): Promise<{ id: string; name: string; pageToken: string }> {
+  const resolved = await resolveFacebookPageTarget(pageId, pageToken);
+  return {
+    id: resolved.pageId,
+    name: resolved.pageName || 'Facebook Page',
+    pageToken: resolved.pageToken,
+  };
 }
 
 function openOAuthPopupAndWaitForCode(url: string, expectedState: string): Promise<string> {
@@ -401,8 +508,16 @@ export function buildApiPayloadPreview(
   text: string,
   creds: SocialCredentialsMemory,
   media?: MediaAsset,
-  dispatchMode: DispatchMode = 'official'
+  dispatchMode: PlatformDispatchMode = 'official'
 ): { method: string; endpoint: string; body: Record<string, unknown> } {
+  if (dispatchMode === 'skip') {
+    return {
+      method: 'SKIP',
+      endpoint: 'Platform skipped (independent of other channels)',
+      body: { platform, status: 'skipped' },
+    };
+  }
+
   if (dispatchMode === 'webhook') {
     return {
       method: 'POST',
@@ -469,7 +584,7 @@ export async function publishToSocialPlatform(
   platform: SocialPlatform,
   text: string,
   creds: SocialCredentialsMemory,
-  options: { dispatchMode: DispatchMode; media?: MediaAsset; sourceDocTitle?: string }
+  options: { dispatchMode: PlatformDispatchMode; media?: MediaAsset; sourceDocTitle?: string }
 ): Promise<PublishAttemptResult> {
   const now = new Date().toISOString();
   const preview = buildApiPayloadPreview(
@@ -479,6 +594,16 @@ export async function publishToSocialPlatform(
     options.media,
     options.dispatchMode
   );
+
+  if (options.dispatchMode === 'skip') {
+    return {
+      ok: true,
+      dryRun: true,
+      externalId: `skipped-${platform}`,
+      timestamp: now,
+      endpoint: 'Skipped',
+    };
+  }
 
   if (options.dispatchMode === 'dry-run') {
     return {
@@ -528,10 +653,16 @@ export async function publishToSocialPlatform(
         throw new Error('Facebook Page ID and Page Access Token are required.');
       }
 
+      // Ensure we are posting to a Page node using a Page Access Token (User tokens trigger #200 publish_actions)
+      const resolved = await resolveFacebookPageTarget(
+        creds.facebookPageId,
+        creds.facebookPageToken
+      );
+
       if (options.media) {
         const form = new FormData();
         form.append('caption', text);
-        form.append('access_token', creds.facebookPageToken);
+        form.append('access_token', resolved.pageToken);
 
         if (options.media.publicUrl && /^https?:\/\//i.test(options.media.publicUrl)) {
           form.append('url', options.media.publicUrl);
@@ -542,7 +673,7 @@ export async function publishToSocialPlatform(
         }
 
         const res = await fetch(
-          `https://graph.facebook.com/v21.0/${encodeURIComponent(creds.facebookPageId)}/photos`,
+          `https://graph.facebook.com/v21.0/${encodeURIComponent(resolved.pageId)}/photos`,
           { method: 'POST', body: form }
         );
         const json = await res.json();
@@ -558,13 +689,13 @@ export async function publishToSocialPlatform(
       }
 
       const res = await fetch(
-        `https://graph.facebook.com/v21.0/${encodeURIComponent(creds.facebookPageId)}/feed`,
+        `https://graph.facebook.com/v21.0/${encodeURIComponent(resolved.pageId)}/feed`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             message: text,
-            access_token: creds.facebookPageToken,
+            access_token: resolved.pageToken,
           }),
         }
       );
@@ -674,9 +805,13 @@ export async function publishToSocialPlatform(
       platform === 'twitter' && rawMsg.toLowerCase().includes('failed to fetch')
         ? ' Browser blocked cross-origin request to api.x.com (CORS). Add a Cloudflare Worker CORS Relay URL or switch to Webhook Bridge under Connections.'
         : '';
+    const fbPublishHint =
+      platform === 'facebook' && rawMsg.includes('publish_actions')
+        ? ' This happens when using a User Access Token or personal User ID instead of a Facebook Page Access Token + Page ID. In Graph API Explorer, select your Page under "User or Page" -> "Get Page Access Token" and click Load Pages & Instagram.'
+        : '';
     return {
       ok: false,
-      error: `${rawMsg}${corsHint}`,
+      error: `${rawMsg}${corsHint}${fbPublishHint}`,
       timestamp: now,
       endpoint: preview.endpoint,
     };

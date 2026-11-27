@@ -3,6 +3,8 @@ import {
   DriveFolderLink,
   MarkdownDoc,
   MediaAsset,
+  PlatformDispatchConfig,
+  PlatformDispatchMode,
   QueuePost,
   ScheduleConfig,
   SnipRule,
@@ -16,6 +18,7 @@ const STORAGE_KEYS = {
   driveFolders: 'dispatchmd_drive_folders_v1',
   localMedia: 'dispatchmd_local_media_v1',
   dispatchMode: 'dispatchmd_dispatch_mode_v1',
+  platformModes: 'dispatchmd_platform_modes_v1',
 };
 
 function safeRead<T>(key: string, fallback: T): T {
@@ -48,6 +51,8 @@ function safeWrite<T>(key: string, value: T): void {
   }
 }
 
+const VALID_MODES = new Set<PlatformDispatchMode>(['dry-run', 'official', 'webhook', 'skip']);
+
 export const workspaceStorage = {
   loadDocs: (fallback: MarkdownDoc[]) => safeRead<MarkdownDoc[]>(STORAGE_KEYS.docs, fallback),
   saveDocs: (docs: MarkdownDoc[]) => safeWrite(STORAGE_KEYS.docs, docs),
@@ -75,10 +80,30 @@ export const workspaceStorage = {
       media.filter((m) => m.source === 'sample' || (m.source === 'local' && !m.url.startsWith('blob:')))
     ),
 
-  loadDispatchMode: (fallback: DispatchMode): DispatchMode => {
-    const val = safeRead<string>(STORAGE_KEYS.dispatchMode, fallback);
-    if (val === 'dry-run' || val === 'official' || val === 'webhook') return val;
-    return fallback;
+  loadPlatformModes: (fallback: PlatformDispatchConfig): PlatformDispatchConfig => {
+    const legacy = safeRead<string>(STORAGE_KEYS.dispatchMode, '');
+    const legacyMode: DispatchMode | null =
+      legacy === 'dry-run' || legacy === 'official' || legacy === 'webhook' ? legacy : null;
+    const defaultFromLegacy: PlatformDispatchConfig = legacyMode
+      ? { facebook: legacyMode, instagram: legacyMode, twitter: legacyMode }
+      : fallback;
+
+    const raw = safeRead<Partial<PlatformDispatchConfig>>(
+      STORAGE_KEYS.platformModes,
+      defaultFromLegacy
+    );
+    return {
+      facebook: VALID_MODES.has(raw.facebook as PlatformDispatchMode)
+        ? (raw.facebook as PlatformDispatchMode)
+        : defaultFromLegacy.facebook,
+      instagram: VALID_MODES.has(raw.instagram as PlatformDispatchMode)
+        ? (raw.instagram as PlatformDispatchMode)
+        : defaultFromLegacy.instagram,
+      twitter: VALID_MODES.has(raw.twitter as PlatformDispatchMode)
+        ? (raw.twitter as PlatformDispatchMode)
+        : defaultFromLegacy.twitter,
+    };
   },
-  saveDispatchMode: (mode: DispatchMode) => safeWrite(STORAGE_KEYS.dispatchMode, mode),
+  savePlatformModes: (modes: PlatformDispatchConfig) =>
+    safeWrite(STORAGE_KEYS.platformModes, modes),
 };
