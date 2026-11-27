@@ -246,6 +246,28 @@ export async function startMetaGraphOAuth(appId: string): Promise<{
   return { userAccessToken, pages };
 }
 
+async function diagnoseUserTokenPermissions(userToken: string): Promise<string> {
+  try {
+    const res = await fetch(
+      `https://graph.facebook.com/v21.0/me/permissions?access_token=${encodeURIComponent(
+        userToken
+      )}`
+    );
+    const json = await res.json().catch(() => ({}));
+    const list: Array<{ permission: string; status: string }> = json?.data || [];
+    const granted = list.filter((p) => p.status === 'granted').map((p) => p.permission);
+    const missing = ['pages_show_list', 'pages_manage_posts', 'pages_read_engagement'].filter(
+      (req) => !granted.includes(req)
+    );
+    if (missing.length > 0) {
+      return `Your token is missing required Page permissions (${missing.join(', ')}). Granted: ${granted.join(', ') || 'none'}. Keep "User or Page" on "Get User Access Token" (do NOT click "Get Page Access Token"), add pages_show_list, pages_read_engagement, and pages_manage_posts, regenerate, and check your Page in the login popup.`;
+    }
+    return 'Page permissions are granted, but 0 Pages were linked to this token. Click "Generate Access Token" again in Graph API Explorer, choose "Edit Access" or "Opt in to all current and future Pages", and make sure your Facebook Page is checked.';
+  } catch {
+    return 'Keep "User or Page" on "Get User Access Token" (do not use "Get Page Access Token"), add pages_show_list, pages_read_engagement, and pages_manage_posts, check your Page in the popup, then click Load Pages & Instagram.';
+  }
+}
+
 export async function fetchMetaManagedPages(
   userOrPageToken: string
 ): Promise<FacebookManagedPage[]> {
@@ -362,16 +384,17 @@ export async function resolveFacebookPageTarget(
     };
   }
 
+  const diagnostic = await diagnoseUserTokenPermissions(cleanToken);
   if (!cleanId && pages.length === 0) {
-    throw new Error(
-      'You entered a User Access Token, but Meta returned 0 managed Pages. In Graph API Explorer, switch "User or Page" to "Get Page Access Token" for your Facebook Page (with pages_manage_posts & pages_show_list), then click Load Pages & Instagram.'
-    );
+    throw new Error(`Meta returned 0 managed Pages for this User Token. ${diagnostic}`);
   }
 
   throw new Error(
-    'A Facebook Page Access Token is required (User Access Tokens trigger the deprecated publish_actions error). In Graph API Explorer, select "Get Page Access Token" under "User or Page" and paste that Page token here.'
+    `Could not exchange this token for a Page Access Token (User Tokens alone trigger Meta's deprecated publish_actions error). ${diagnostic}`
   );
 }
+
+export { diagnoseUserTokenPermissions };
 
 export async function testFacebookPageConnection(
   pageId: string,
@@ -807,7 +830,7 @@ export async function publishToSocialPlatform(
         : '';
     const fbPublishHint =
       platform === 'facebook' && rawMsg.includes('publish_actions')
-        ? ' This happens when using a User Access Token or personal User ID instead of a Facebook Page Access Token + Page ID. In Graph API Explorer, select your Page under "User or Page" -> "Get Page Access Token" and click Load Pages & Instagram.'
+        ? ' This happens when posting with a User Access Token or personal User ID instead of a Page Access Token + Page ID. Generate a User Token with pages_show_list, pages_read_engagement, and pages_manage_posts (do NOT click "Get Page Access Token", which uses deprecated manage_pages), check your Page in the popup, and click Load Pages & Instagram.'
         : '';
     return {
       ok: false,

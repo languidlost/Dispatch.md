@@ -7,6 +7,7 @@ import {
   SocialPlatform,
 } from '../types';
 import {
+  diagnoseUserTokenPermissions,
   FacebookManagedPage,
   fetchMetaManagedPages,
   getStaticCallbackUri,
@@ -155,10 +156,8 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
         });
         onNotify(`Verified Page token for "${page.name}".`);
       } else {
-        onNotify(
-          'No managed Facebook Pages were returned for this token. In Graph API Explorer, set "User or Page" to "Get Page Access Token" and pick your Page (with pages_manage_posts & pages_show_list).',
-          'error'
-        );
+        const diagnostic = await diagnoseUserTokenPermissions(creds.facebookPageToken.trim());
+        onNotify(diagnostic, 'error');
       }
     } catch (err) {
       onNotify(err instanceof Error ? err.message : 'Failed to query Meta Pages.', 'error');
@@ -435,7 +434,10 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
           <div className="font-medium text-slate-900">Quick 3-step setup (no OAuth redirect needed):</div>
           <ol className="list-decimal list-inside space-y-1">
             <li>
-              Open Meta Graph API Explorer above, choose your Meta App (or create a quick Business app), and add permissions:{' '}
+              In Graph API Explorer, choose a <strong>Business</strong> app (or one with the <strong>Manage everything on your Page</strong> use case). Keep <strong>User or Page</strong> set to <strong>Get User Access Token</strong> — do <strong>not</strong> click &ldquo;Get Page Access Token&rdquo; directly (Meta&apos;s shortcut injects the deprecated <code className="font-mono">manage_pages</code> scope).
+            </li>
+            <li>
+              Add permissions:{' '}
               <code className="font-mono text-slate-900">
                 pages_manage_posts, pages_read_engagement, pages_show_list, instagram_basic, instagram_content_publish
               </code>
@@ -453,22 +455,24 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
               </button>
             </li>
             <li>
-              Click <strong>Generate Access Token</strong>, then under the <strong>User or Page</strong> dropdown switch from User Token to <strong>your Facebook Page</strong> (Page Access Token). Using a User Token or personal profile ID causes Meta&apos;s deprecated <code className="font-mono">publish_actions</code> error.
+              Click <strong>Generate Access Token</strong> and in the Facebook login dialog <strong>check the box for your Facebook Page</strong> (or select <em>Opt in to all current and future Pages</em>).
             </li>
-            <li>Paste the token below and click <strong>Load Pages &amp; Instagram</strong>.</li>
+            <li>
+              Paste that User Token below and click <strong>Load Pages &amp; Instagram</strong>—Dispatch.md automatically exchanges it for your real <strong>Page Access Token</strong> (or pick your Page name from the Graph API Explorer dropdown <em>after</em> generating the User Token).
+            </li>
           </ol>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
           <div className="md:col-span-8">
             <label className="block text-xs font-medium text-slate-700 mb-1">
-              Session Graph API Page Access Token (Saved Locally in Browser)
+              Meta Graph API Token (User Token with Page Permissions or Page Access Token — Saved Locally)
             </label>
             <input
               type="password"
               value={creds.facebookPageToken}
               onChange={(e) => onUpdateCreds({ facebookPageToken: e.target.value })}
-              placeholder="Paste Page Access Token from Meta Graph API Explorer..."
+              placeholder="Paste User or Page Token from Meta Graph API Explorer..."
               className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-lg"
             />
           </div>
