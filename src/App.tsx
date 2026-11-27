@@ -108,6 +108,13 @@ function formatCountdown(target: Date | null, now: Date, enabled: boolean): stri
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
+function toLocalDateTimeInputValue(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
+    date.getHours()
+  )}:${pad(date.getMinutes())}`;
+}
+
 export default function App() {
   // Handle popup OAuth returns cleanly for static GitHub Pages URLs
   useEffect(() => {
@@ -701,6 +708,80 @@ export default function App() {
     notify('Cleared saved social tokens and connection fields from this browser.');
   };
 
+  const handleBulkSchedulePosts = useCallback(
+    (ids: string[], scheduledAt?: string, staggerMinutes = 0) => {
+      const idSet = new Set(ids);
+      if (idSet.size === 0) return;
+
+      const baseTimeMs = scheduledAt ? new Date(scheduledAt).getTime() : NaN;
+      if (scheduledAt && Number.isNaN(baseTimeMs)) {
+        notify('Choose a valid date and time before bulk-assigning.', 'error');
+        return;
+      }
+
+      let updatedCount = 0;
+      setQueue((prev) => {
+        const orderIndexMap = new Map<string, number>();
+        [...prev]
+          .filter((item) => idSet.has(item.id) && item.status !== 'published')
+          .sort((a, b) => a.order - b.order)
+          .forEach((item, idx) => {
+            orderIndexMap.set(item.id, idx);
+          });
+
+        updatedCount = orderIndexMap.size;
+        return prev.map((item) => {
+          const seqIdx = orderIndexMap.get(item.id);
+          if (seqIdx === undefined) return item;
+          if (!scheduledAt) {
+            return {
+              ...item,
+              scheduledAt: undefined,
+              status: item.status === 'scheduled' ? 'queued' : item.status,
+            };
+          }
+          const assignedAt =
+            staggerMinutes > 0
+              ? toLocalDateTimeInputValue(new Date(baseTimeMs + seqIdx * staggerMinutes * 60_000))
+              : scheduledAt;
+          return {
+            ...item,
+            scheduledAt: assignedAt,
+            status: 'scheduled',
+          };
+        });
+      });
+
+      if (updatedCount === 0) {
+        notify('Select at least one pending or scheduled post.', 'error');
+        return;
+      }
+
+      if (!scheduledAt) {
+        notify(`Cleared scheduled timestamps on ${updatedCount} selected post(s).`);
+      } else if (staggerMinutes > 0) {
+        notify(
+          `Scheduled ${updatedCount} post(s) starting ${new Date(baseTimeMs).toLocaleString([], {
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+          })} (+${staggerMinutes}m apart).`
+        );
+      } else {
+        notify(
+          `Assigned ${new Date(baseTimeMs).toLocaleString([], {
+            month: 'short',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+          })} to ${updatedCount} selected post(s).`
+        );
+      }
+    },
+    [notify]
+  );
+
   const handleReleaseHeadClick = () => {
     if (sortedPending.length === 0) return;
     setConfirmRequest({ post: sortedPending[0] });
@@ -778,6 +859,7 @@ export default function App() {
               onUpdatePost={(id, patch) =>
                 setQueue((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)))
               }
+              onBulkSchedulePosts={handleBulkSchedulePosts}
               onMovePost={handleMovePost}
               onDeletePost={(id) =>
                 setQueue((prev) => prev.filter((p) => p.id !== id))

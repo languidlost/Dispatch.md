@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import {
   ArrowDown,
   ArrowUp,
+  CalendarClock,
   Check,
   CheckCircle2,
   Code2,
@@ -31,6 +32,7 @@ interface QueueWorkspaceProps {
   platformModes: PlatformDispatchConfig;
   isReleasingId: string | null;
   onUpdatePost: (id: string, patch: Partial<QueuePost>) => void;
+  onBulkSchedulePosts: (ids: string[], scheduledAt?: string, staggerMinutes?: number) => void;
   onMovePost: (id: string, direction: 'up' | 'down') => void;
   onDeletePost: (id: string) => void;
   onRequestRelease: (post: QueuePost, onlyPlatforms?: SocialPlatform[]) => void;
@@ -43,6 +45,26 @@ const PLATFORM_LABELS: Record<SocialPlatform, string> = {
   twitter: 'X',
 };
 
+function getDefaultScheduleInput(): string {
+  const d = new Date(Date.now() + 60 * 60_000);
+  d.setMinutes(0, 0, 0);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
+    d.getHours()
+  )}:${pad(d.getMinutes())}`;
+}
+
+function formatScheduledLabel(scheduledAt: string): string {
+  const d = new Date(scheduledAt);
+  if (Number.isNaN(d.getTime())) return scheduledAt;
+  return d.toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 export const QueueWorkspace: React.FC<QueueWorkspaceProps> = ({
   queue,
   mediaLibrary,
@@ -50,6 +72,7 @@ export const QueueWorkspace: React.FC<QueueWorkspaceProps> = ({
   platformModes,
   isReleasingId,
   onUpdatePost,
+  onBulkSchedulePosts,
   onMovePost,
   onDeletePost,
   onRequestRelease,
@@ -61,6 +84,9 @@ export const QueueWorkspace: React.FC<QueueWorkspaceProps> = ({
   const [previewPlatform, setPreviewPlatform] = useState<SocialPlatform>('twitter');
   const [showPayload, setShowPayload] = useState(false);
   const [copiedPostId, setCopiedPostId] = useState<string | null>(null);
+  const [multiSelectedIds, setMultiSelectedIds] = useState<string[]>([]);
+  const [bulkScheduledAt, setBulkScheduledAt] = useState<string>(() => getDefaultScheduleInput());
+  const [bulkStaggerMinutes, setBulkStaggerMinutes] = useState<number>(0);
 
   const mediaMap = useMemo(() => {
     const map = new Map<string, MediaAsset>();
@@ -120,6 +146,34 @@ export const QueueWorkspace: React.FC<QueueWorkspaceProps> = ({
       ? post.platforms.filter((p) => p !== platform)
       : [...post.platforms, platform];
     onUpdatePost(post.id, { platforms: next });
+  };
+
+  const selectableFilteredIds = useMemo(
+    () => filteredPosts.filter((p) => p.status !== 'published').map((p) => p.id),
+    [filteredPosts]
+  );
+
+  const activeMultiSelectedIds = useMemo(() => {
+    const allowed = new Set(selectableFilteredIds);
+    return multiSelectedIds.filter((id) => allowed.has(id));
+  }, [multiSelectedIds, selectableFilteredIds]);
+
+  const allSelectableChecked =
+    selectableFilteredIds.length > 0 &&
+    activeMultiSelectedIds.length === selectableFilteredIds.length;
+
+  const toggleMultiSelect = (id: string) => {
+    setMultiSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const toggleSelectAll = () => {
+    if (allSelectableChecked) {
+      setMultiSelectedIds([]);
+    } else {
+      setMultiSelectedIds(selectableFilteredIds);
+    }
   };
 
   return (
@@ -199,8 +253,92 @@ export const QueueWorkspace: React.FC<QueueWorkspaceProps> = ({
         <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
           {/* Left Queue List */}
           <div className="xl:col-span-7 bg-white border border-slate-200 rounded-xl divide-y divide-slate-200 overflow-hidden">
+            {/* Multi-Select Bulk Scheduling Toolbar */}
+            {selectableFilteredIds.length > 0 && (
+              <div className="px-4 py-3 bg-slate-50/90 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={allSelectableChecked}
+                      onChange={toggleSelectAll}
+                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-600"
+                    />
+                    <span>
+                      {activeMultiSelectedIds.length > 0
+                        ? `${activeMultiSelectedIds.length} of ${selectableFilteredIds.length} selected`
+                        : `Select all pending (${selectableFilteredIds.length})`}
+                    </span>
+                  </label>
+
+                  {activeMultiSelectedIds.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setMultiSelectedIds([])}
+                      className="text-xs font-medium text-slate-500 hover:text-slate-900 cursor-pointer"
+                    >
+                      Clear selection
+                    </button>
+                  )}
+                </div>
+
+                {activeMultiSelectedIds.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-200/80">
+                    <div className="inline-flex items-center gap-1.5 text-xs text-slate-600">
+                      <CalendarClock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                      <span className="font-medium text-slate-700">Bulk schedule:</span>
+                    </div>
+                    <input
+                      type="datetime-local"
+                      value={bulkScheduledAt}
+                      onChange={(e) => setBulkScheduledAt(e.target.value)}
+                      aria-label="Bulk scheduled release timestamp"
+                      className="px-2.5 py-1 text-xs font-mono border border-slate-200 rounded-md bg-white text-slate-900 focus:outline-none focus:border-blue-600"
+                    />
+                    <select
+                      value={bulkStaggerMinutes}
+                      onChange={(e) => setBulkStaggerMinutes(Number(e.target.value))}
+                      aria-label="Bulk schedule stagger interval"
+                      className="px-2 py-1 text-xs border border-slate-200 rounded-md bg-white text-slate-700 focus:outline-none focus:border-blue-600"
+                    >
+                      <option value={0}>Same timestamp</option>
+                      <option value={15}>Stagger +15m</option>
+                      <option value={30}>Stagger +30m</option>
+                      <option value={60}>Stagger +60m</option>
+                    </select>
+                    <button
+                      type="button"
+                      disabled={!bulkScheduledAt}
+                      onClick={() => {
+                        onBulkSchedulePosts(
+                          activeMultiSelectedIds,
+                          bulkScheduledAt,
+                          bulkStaggerMinutes
+                        );
+                        setMultiSelectedIds([]);
+                      }}
+                      className="px-3 py-1 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md disabled:opacity-40 cursor-pointer whitespace-nowrap"
+                    >
+                      Assign to {activeMultiSelectedIds.length}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onBulkSchedulePosts(activeMultiSelectedIds, undefined, 0);
+                        setMultiSelectedIds([]);
+                      }}
+                      className="px-2.5 py-1 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 rounded-md cursor-pointer whitespace-nowrap"
+                    >
+                      Clear Time
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             {filteredPosts.map((post, idx) => {
               const isSelected = activePost?.id === post.id;
+              const isMultiSelected = activeMultiSelectedIds.includes(post.id);
               const attachedMedia = post.mediaId ? mediaMap.get(post.mediaId) : undefined;
               const diagnostics = getCharDiagnostics(post.text, post.platforms);
               const overLimit = diagnostics.some((d) => d.overLimit);
@@ -211,12 +349,29 @@ export const QueueWorkspace: React.FC<QueueWorkspaceProps> = ({
                   key={post.id}
                   onClick={() => setSelectedPostId(post.id)}
                   className={`p-4 transition-colors cursor-pointer ${
-                    isSelected ? 'bg-blue-50/45' : 'hover:bg-slate-50/70'
+                    isMultiSelected
+                      ? 'bg-blue-50/70'
+                      : isSelected
+                        ? 'bg-blue-50/45'
+                        : 'hover:bg-slate-50/70'
                   }`}
                 >
                   {/* Unboxed Metadata Row */}
                   <div className="flex items-center justify-between gap-3 mb-2">
                     <div className="flex items-center gap-2 text-xs text-slate-500 min-w-0">
+                      <span
+                        className="inline-flex items-center"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isMultiSelected}
+                          disabled={post.status === 'published'}
+                          onChange={() => toggleMultiSelect(post.id)}
+                          aria-label={`Select post ${idx + 1} for bulk scheduling`}
+                          className="rounded border-slate-300 text-blue-600 focus:ring-blue-600 disabled:opacity-30 cursor-pointer"
+                        />
+                      </span>
                       <span className="font-mono tabular-nums font-medium text-slate-700">
                         #{idx + 1}
                       </span>
@@ -245,7 +400,9 @@ export const QueueWorkspace: React.FC<QueueWorkspaceProps> = ({
                             : post.status === 'failed'
                               ? 'Attention needed'
                               : post.status === 'scheduled'
-                                ? 'Scheduled'
+                                ? post.scheduledAt
+                                  ? `Scheduled (${formatScheduledLabel(post.scheduledAt)})`
+                                  : 'Scheduled'
                                 : 'Queued'}
                       </span>
                     </div>
