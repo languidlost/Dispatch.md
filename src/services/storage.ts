@@ -21,7 +21,19 @@ function safeRead<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return fallback;
-    return JSON.parse(raw) as T;
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(fallback) && !Array.isArray(parsed)) {
+      return fallback;
+    }
+    if (
+      typeof fallback === 'object' &&
+      fallback !== null &&
+      !Array.isArray(fallback) &&
+      (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+    ) {
+      return fallback;
+    }
+    return parsed as T;
   } catch {
     return fallback;
   }

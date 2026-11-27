@@ -9,8 +9,22 @@ import {
 import firebaseConfig from '../../firebase-applet-config.json';
 import { MarkdownDoc, MediaAsset } from '../types';
 
-const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-const auth = getAuth(app);
+let cachedAuth: ReturnType<typeof getAuth> | null = null;
+let firebaseInitError: Error | null = null;
+
+function getFirebaseAuth() {
+  if (cachedAuth) return cachedAuth;
+  if (firebaseInitError) throw firebaseInitError;
+  try {
+    const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+    cachedAuth = getAuth(app);
+    return cachedAuth;
+  } catch (err) {
+    firebaseInitError =
+      err instanceof Error ? err : new Error('Failed to initialize Firebase Authentication.');
+    throw firebaseInitError;
+  }
+}
 
 export const GOOGLE_WORKSPACE_SCOPES = [
   'https://www.googleapis.com/auth/drive.readonly',
@@ -30,19 +44,25 @@ export const initGoogleAuth = (
   onAuthSuccess?: (user: User, token: string) => void,
   onAuthMissing?: (user: User | null) => void
 ) => {
-  return onAuthStateChanged(auth, (user: User | null) => {
-    if (user) {
-      if (cachedAccessToken) {
-        onAuthSuccess?.(user, cachedAccessToken);
-      } else if (!isSigningIn) {
+  try {
+    const auth = getFirebaseAuth();
+    return onAuthStateChanged(auth, (user: User | null) => {
+      if (user) {
+        if (cachedAccessToken) {
+          onAuthSuccess?.(user, cachedAccessToken);
+        } else if (!isSigningIn) {
+          cachedAccessToken = null;
+          onAuthMissing?.(user);
+        }
+      } else {
         cachedAccessToken = null;
-        onAuthMissing?.(user);
+        onAuthMissing?.(null);
       }
-    } else {
-      cachedAccessToken = null;
-      onAuthMissing?.(null);
-    }
-  });
+    });
+  } catch {
+    onAuthMissing?.(null);
+    return () => {};
+  }
 };
 
 export const signInWithGoogleDrive = async (): Promise<{
@@ -51,6 +71,7 @@ export const signInWithGoogleDrive = async (): Promise<{
 }> => {
   try {
     isSigningIn = true;
+    const auth = getFirebaseAuth();
     const result = await signInWithPopup(auth, provider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (!credential?.accessToken) {
@@ -67,7 +88,12 @@ export const getGoogleAccessToken = (): string | null => cachedAccessToken;
 
 export const signOutGoogle = async (): Promise<void> => {
   cachedAccessToken = null;
-  await auth.signOut();
+  try {
+    const auth = getFirebaseAuth();
+    await auth.signOut();
+  } catch {
+    // Ignore if Firebase auth is uninitialized
+  }
 };
 
 export const parseDriveFolderId = (input: string): string | null => {

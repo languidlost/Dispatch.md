@@ -442,9 +442,11 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
         </h2>
         <p className="text-xs text-slate-600 leading-relaxed">
           This repository is configured with <code className="font-mono">base: &apos;./&apos;</code> in{' '}
-          <code className="font-mono">vite.config.ts</code> and a plugin-free workflow at{' '}
-          <code className="font-mono">.github/workflows/deploy.yml</code>. Push to{' '}
-          <code className="font-mono">main</code> and enable <strong>GitHub Actions</strong> under Repository Settings &rarr; Pages to host it statically with zero backend servers. Add your GitHub Pages domain to Firebase Authentication Authorized Domains to keep Google Sign-In active in production.
+          <code className="font-mono">vite.config.ts</code>, <code className="font-mono">public/.nojekyll</code>, and a plugin-free workflow at{' '}
+          <code className="font-mono">.github/workflows/deploy.yml</code>. In your GitHub repository under{' '}
+          <strong>Settings &rarr; Pages &rarr; Build and deployment &rarr; Source</strong>, select{' '}
+          <strong>GitHub Actions</strong> (do not deploy raw branch source directly, as Vite must compile TypeScript into{' '}
+          <code className="font-mono">dist/</code>). Add your GitHub Pages domain to Firebase Authentication Authorized Domains to keep Google Sign-In active in production.
         </p>
       </section>
     </div>
