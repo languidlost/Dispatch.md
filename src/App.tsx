@@ -39,7 +39,12 @@ import {
   handleStaticOAuthCallbackIfPopup,
   publishToSocialPlatform,
 } from './services/socialApis';
-import { workspaceStorage } from './services/storage';
+import {
+  buildConfigBackupPayload,
+  EMPTY_CREDENTIALS,
+  parseConfigBackupJson,
+  workspaceStorage,
+} from './services/storage';
 import { TopBar } from './components/TopBar';
 import { Sidebar } from './components/Sidebar';
 import { QueueWorkspace } from './components/QueueWorkspace';
@@ -136,20 +141,10 @@ export default function App() {
     })
   );
 
-  // Strict in-memory credentials (never persisted to localStorage)
-  const [creds, setCreds] = useState<SocialCredentialsMemory>({
-    facebookPageId: '',
-    facebookPageName: '',
-    facebookPageToken: '',
-    facebookAppId: '',
-    instagramUserId: '',
-    instagramUsername: '',
-    twitterClientId: '',
-    twitterHandle: '',
-    twitterAccessToken: '',
-    twitterCorsRelayUrl: '',
-    webhookUrl: '',
-  });
+  // Persisted connection fields in localStorage (survives page refreshes)
+  const [creds, setCreds] = useState<SocialCredentialsMemory>(() =>
+    workspaceStorage.loadCreds(EMPTY_CREDENTIALS)
+  );
 
   // Google Auth state
   const [googleUser, setGoogleUser] = useState<User | null>(null);
@@ -197,6 +192,9 @@ export default function App() {
   useEffect(() => {
     workspaceStorage.savePlatformModes(platformModes);
   }, [platformModes]);
+  useEffect(() => {
+    workspaceStorage.saveCreds(creds);
+  }, [creds]);
 
   // Initialize Firebase Google Auth listener
   useEffect(() => {
@@ -635,6 +633,60 @@ export default function App() {
     notify(`Added ${assets.length} local photo(s) to media library.`);
   };
 
+  const handleExportConfigJson = () => {
+    const payload = buildConfigBackupPayload({
+      creds,
+      platformModes,
+      schedule,
+      driveFolders,
+      rules,
+    });
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: 'application/json',
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const dateStamp = new Date().toISOString().slice(0, 10);
+    link.href = url;
+    link.download = `dispatchmd-config-${dateStamp}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    notify('Downloaded Dispatch.md configuration JSON backup.');
+  };
+
+  const handleImportConfigJson = async (file: File) => {
+    try {
+      const text = await file.text();
+      const restored = parseConfigBackupJson(text, platformModes);
+      if (restored.creds) {
+        setCreds(restored.creds);
+      }
+      if (restored.platformModes) {
+        setPlatformModes(restored.platformModes);
+      }
+      if (restored.schedule) {
+        setSchedule(restored.schedule);
+      }
+      if (restored.driveFolders) {
+        setDriveFolders(restored.driveFolders);
+      }
+      if (restored.rules) {
+        setRules(restored.rules);
+      }
+      notify(`Restored saved fields from "${file.name}".`);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Unable to import JSON config.', 'error');
+    }
+  };
+
+  const handleClearSavedCreds = () => {
+    setCreds(EMPTY_CREDENTIALS);
+    workspaceStorage.clearCreds();
+    notify('Cleared saved social tokens and connection fields from this browser.');
+  };
+
   const handleReleaseHeadClick = () => {
     if (sortedPending.length === 0) return;
     setConfirmRequest({ post: sortedPending[0] });
@@ -847,6 +899,9 @@ export default function App() {
                 setPlatformModes(next);
                 notify('Updated independent channel dispatch modes.');
               }}
+              onExportConfigJson={handleExportConfigJson}
+              onImportConfigJson={handleImportConfigJson}
+              onClearSavedCreds={handleClearSavedCreds}
               onNotify={notify}
             />
           )}
