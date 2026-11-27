@@ -2,5 +2,7 @@
   "name": "Dispatch.md",
   "description": "Static Markdown-to-social publishing queue with automated snipping rules, Google Drive & Photos sync, and Facebook, Instagram, and X scheduling for GitHub Pages.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }
