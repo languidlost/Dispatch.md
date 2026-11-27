@@ -31,9 +31,12 @@ export const GOOGLE_WORKSPACE_SCOPES = [
   'https://www.googleapis.com/auth/drive.photos.readonly',
 ];
 
-const provider = new GoogleAuthProvider();
-for (const scope of GOOGLE_WORKSPACE_SCOPES) {
-  provider.addScope(scope);
+function getGoogleProvider() {
+  const provider = new GoogleAuthProvider();
+  for (const scope of GOOGLE_WORKSPACE_SCOPES) {
+    provider.addScope(scope);
+  }
+  return provider;
 }
 
 // Strict in-memory token cache (never stored in localStorage or sessionStorage)
@@ -72,7 +75,7 @@ export const signInWithGoogleDrive = async (): Promise<{
   try {
     isSigningIn = true;
     const auth = getFirebaseAuth();
-    const result = await signInWithPopup(auth, provider);
+    const result = await signInWithPopup(auth, getGoogleProvider());
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (!credential?.accessToken) {
       throw new Error('Google sign-in completed, but no access token was returned.');

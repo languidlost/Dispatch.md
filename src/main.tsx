@@ -3,6 +3,12 @@ import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
 
+declare global {
+  interface Window {
+    __DISPATCH_MOUNTED__?: boolean;
+  }
+}
+
 interface ErrorBoundaryState {
   error: Error | null;
 }
@@ -56,6 +62,8 @@ class RootErrorBoundary extends React.Component<
     return this.props.children;
   }
 }
+
+window.__DISPATCH_MOUNTED__ = true;
 
 createRoot(document.getElementById('root')!).render(
   <RootErrorBoundary>
