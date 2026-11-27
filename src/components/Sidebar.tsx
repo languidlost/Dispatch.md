@@ -287,13 +287,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
           >
             {platformModes.facebook === 'official'
               ? connectedSummary.facebook
-                ? 'Live API'
+                ? 'Live Page API'
                 : 'Live (No token)'
-              : platformModes.facebook === 'webhook'
-                ? 'Webhook'
-                : platformModes.facebook === 'skip'
-                  ? 'Skipped'
-                  : 'Dry-Run'}
+              : platformModes.facebook === 'composer'
+                ? 'Personal Copy & Post'
+                : platformModes.facebook === 'webhook'
+                  ? 'Webhook'
+                  : platformModes.facebook === 'skip'
+                    ? 'Skipped'
+                    : 'Dry-Run'}
           </span>
         </div>
         <div className="flex items-center justify-between">
@@ -311,11 +313,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
               ? connectedSummary.instagram
                 ? 'Live API'
                 : 'Live (No token)'
-              : platformModes.instagram === 'webhook'
-                ? 'Webhook'
-                : platformModes.instagram === 'skip'
-                  ? 'Skipped'
-                  : 'Dry-Run'}
+              : platformModes.instagram === 'composer'
+                ? 'Personal Copy & Post'
+                : platformModes.instagram === 'webhook'
+                  ? 'Webhook'
+                  : platformModes.instagram === 'skip'
+                    ? 'Skipped'
+                    : 'Dry-Run'}
           </span>
         </div>
         <div className="flex items-center justify-between">
@@ -333,11 +337,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
               ? connectedSummary.twitter
                 ? 'Live API'
                 : 'Live (No token)'
-              : platformModes.twitter === 'webhook'
-                ? 'Webhook'
-                : platformModes.twitter === 'skip'
-                  ? 'Manual / Skip'
-                  : 'Dry-Run'}
+              : platformModes.twitter === 'composer'
+                ? 'Personal Copy & Post'
+                : platformModes.twitter === 'webhook'
+                  ? 'Webhook'
+                  : platformModes.twitter === 'skip'
+                    ? 'Skipped'
+                    : 'Dry-Run'}
           </span>
         </div>
         <div className="flex items-center justify-between pt-1 border-t border-slate-200/70">

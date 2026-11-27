@@ -295,11 +295,20 @@ export default function App() {
           twitter: 'X',
         };
 
+        const usesComposer = platformsToRun.some((p) => platformModes[p] === 'composer');
+        if (usesComposer && navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(post.text).catch(() => {});
+        }
+
         if (failedPlatforms.length === 0) {
           notify(
-            `Dispatched post from ${post.sourceDocTitle}.md to ${succeededPlatforms
-              .map((p) => labels[p])
-              .join(', ')}.`
+            usesComposer
+              ? `Copied post text to clipboard and prepared ${succeededPlatforms
+                  .map((p) => labels[p])
+                  .join(', ')}. Use the Open link in Dispatch Results to paste to your personal account.`
+              : `Dispatched post from ${post.sourceDocTitle}.md to ${succeededPlatforms
+                  .map((p) => labels[p])
+                  .join(', ')}.`
           );
         } else if (succeededPlatforms.length > 0) {
           const firstErr = newResults[failedPlatforms[0]]?.error;
@@ -332,7 +341,12 @@ export default function App() {
       const autoEligible = sortedPending.filter(
         (p) =>
           (p.status === 'queued' || p.status === 'scheduled') &&
-          p.platforms.some((plat) => platformModes[plat] !== 'skip' && !p.results?.[plat]?.ok)
+          p.platforms.some(
+            (plat) =>
+              platformModes[plat] !== 'skip' &&
+              platformModes[plat] !== 'composer' &&
+              !p.results?.[plat]?.ok
+          )
       );
 
       // 1. Check per-post explicit scheduledAt timestamps first

@@ -116,7 +116,7 @@ export interface DriveFolderLink {
 
 export type DispatchMode = 'dry-run' | 'official' | 'webhook';
 
-export type PlatformDispatchMode = DispatchMode | 'skip';
+export type PlatformDispatchMode = DispatchMode | 'composer' | 'skip';
 
 export type PlatformDispatchConfig = Record<SocialPlatform, PlatformDispatchMode>;
 

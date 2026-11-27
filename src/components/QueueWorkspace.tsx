@@ -2,8 +2,10 @@ import React, { useMemo, useState } from 'react';
 import {
   ArrowDown,
   ArrowUp,
+  Check,
   CheckCircle2,
   Code2,
+  Copy,
   Image as ImageIcon,
   Search,
   Send,
@@ -58,6 +60,7 @@ export const QueueWorkspace: React.FC<QueueWorkspaceProps> = ({
   const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
   const [previewPlatform, setPreviewPlatform] = useState<SocialPlatform>('twitter');
   const [showPayload, setShowPayload] = useState(false);
+  const [copiedPostId, setCopiedPostId] = useState<string | null>(null);
 
   const mediaMap = useMemo(() => {
     const map = new Map<string, MediaAsset>();
@@ -546,8 +549,25 @@ export const QueueWorkspace: React.FC<QueueWorkspaceProps> = ({
                             {PLATFORM_LABELS[plat]}
                           </span>
                           {res.ok ? (
-                            <span className="text-emerald-700 font-mono text-right">
-                              {res.dryRun ? 'Simulated' : 'Published'} ({res.externalId})
+                            <span className="text-emerald-700 font-mono text-right inline-flex items-center gap-2">
+                              <span>
+                                {res.externalId === 'personal-composer'
+                                  ? 'Copied for personal post'
+                                  : res.dryRun
+                                    ? `Simulated (${res.externalId})`
+                                    : `Published (${res.externalId})`}
+                              </span>
+                              {res.permalink && (
+                                <a
+                                  href={res.permalink}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-0.5 text-blue-700 hover:underline font-sans font-medium"
+                                >
+                                  <span>Open</span>
+                                  <ExternalLink className="w-3 h-3" />
+                                </a>
+                              )}
                             </span>
                           ) : (
                             <span className="text-red-700 text-right">{res.error}</span>
@@ -560,7 +580,7 @@ export const QueueWorkspace: React.FC<QueueWorkspaceProps> = ({
 
               {/* API Payload Inspector + Release Action */}
               <div className="pt-2 border-t border-slate-200 space-y-3">
-                <div className="flex items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
                   <button
                     type="button"
                     onClick={() => setShowPayload((prev) => !prev)}
@@ -570,17 +590,51 @@ export const QueueWorkspace: React.FC<QueueWorkspaceProps> = ({
                     <span>{showPayload ? 'Hide API Payload' : 'Inspect API Payload'}</span>
                   </button>
 
-                  {activePost.platforms.includes('twitter') && (
-                    <a
-                      href={`https://x.com/intent/tweet?text=${encodeURIComponent(activePost.text)}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-blue-700"
-                    >
-                      <span>Open in X Composer</span>
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
-                  )}
+                  <div className="flex flex-wrap items-center gap-3">
+                    {activePost.platforms.includes('facebook') && (
+                      <div className="inline-flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await navigator.clipboard.writeText(activePost.text).catch(() => {});
+                            setCopiedPostId(activePost.id);
+                            setTimeout(() => setCopiedPostId(null), 2000);
+                          }}
+                          className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-blue-700 cursor-pointer"
+                        >
+                          {copiedPostId === activePost.id ? (
+                            <Check className="w-3 h-3 text-emerald-600" />
+                          ) : (
+                            <Copy className="w-3 h-3" />
+                          )}
+                          <span>
+                            {copiedPostId === activePost.id ? 'Copied!' : 'Copy Text'}
+                          </span>
+                        </button>
+                        <a
+                          href="https://www.facebook.com/"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-blue-700"
+                        >
+                          <span>Open Facebook</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                      </div>
+                    )}
+
+                    {activePost.platforms.includes('twitter') && (
+                      <a
+                        href={`https://x.com/intent/tweet?text=${encodeURIComponent(activePost.text)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-blue-700"
+                      >
+                        <span>Open in X Composer</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    )}
+                  </div>
                 </div>
 
                 {showPayload && payloadPreview && (
@@ -630,7 +684,11 @@ export const QueueWorkspace: React.FC<QueueWorkspaceProps> = ({
                               className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:border-blue-400 hover:text-blue-700 rounded-lg transition-colors cursor-pointer disabled:opacity-40 whitespace-nowrap"
                             >
                               <Send className="w-3 h-3" />
-                              <span>Send {PLATFORM_LABELS[p]} Only</span>
+                              <span>
+                                {platformModes[p] === 'composer'
+                                  ? `Copy & Mark ${PLATFORM_LABELS[p]}`
+                                  : `Send ${PLATFORM_LABELS[p]} Only`}
+                              </span>
                             </button>
                           );
                         })}

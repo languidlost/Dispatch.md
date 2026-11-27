@@ -67,7 +67,13 @@ function safeWrite<T>(key: string, value: T): void {
   }
 }
 
-const VALID_MODES = new Set<PlatformDispatchMode>(['dry-run', 'official', 'webhook', 'skip']);
+const VALID_MODES = new Set<PlatformDispatchMode>([
+  'dry-run',
+  'official',
+  'webhook',
+  'composer',
+  'skip',
+]);
 
 function normalizeCreds(
   raw: unknown,

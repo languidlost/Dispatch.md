@@ -56,16 +56,17 @@ const CLOUDFLARE_WORKER_SNIPPET = `export default {
 };`;
 
 const CHANNEL_META: Array<{ id: SocialPlatform; label: string; hint: string }> = [
-  { id: 'facebook', label: 'Facebook Page', hint: 'Meta Graph API v21.0 or Webhook' },
-  { id: 'instagram', label: 'Instagram Business', hint: 'Meta Graph API v21.0 or Webhook' },
-  { id: 'twitter', label: 'X (Twitter)', hint: 'X API v2, Webhook, or Skip/Manual Composer' },
+  { id: 'facebook', label: 'Facebook', hint: 'Personal Copy & Post (User Profile), Page API v21.0, or Webhook' },
+  { id: 'instagram', label: 'Instagram', hint: 'Personal Copy & Post, Business API v21.0, or Webhook' },
+  { id: 'twitter', label: 'X (Twitter)', hint: 'X API v2, Personal Copy & Post, Webhook, or Skip' },
 ];
 
 const MODE_OPTIONS: Array<{ id: PlatformDispatchMode; label: string }> = [
-  { id: 'official', label: 'Live Official API' },
-  { id: 'webhook', label: 'Webhook Bridge' },
+  { id: 'official', label: 'Live Page/API' },
+  { id: 'composer', label: 'Personal Copy & Post' },
+  { id: 'webhook', label: 'Webhook' },
   { id: 'dry-run', label: 'Dry-Run' },
-  { id: 'skip', label: 'Skip / Manual' },
+  { id: 'skip', label: 'Skip' },
 ];
 
 export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
@@ -129,7 +130,10 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
     }
     setIsMetaAuthLoading(true);
     try {
-      const pages = await fetchMetaManagedPages(creds.facebookPageToken.trim());
+      const pages = await fetchMetaManagedPages(
+        creds.facebookPageToken.trim(),
+        creds.facebookPageId.trim()
+      );
       setMetaPages(pages);
       if (pages.length > 0) {
         const first = pages[0];
@@ -156,7 +160,10 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
         });
         onNotify(`Verified Page token for "${page.name}".`);
       } else {
-        const diagnostic = await diagnoseUserTokenPermissions(creds.facebookPageToken.trim());
+        const diagnostic = await diagnoseUserTokenPermissions(
+          creds.facebookPageToken.trim(),
+          creds.facebookPageId.trim()
+        );
         onNotify(diagnostic, 'error');
       }
     } catch (err) {
@@ -345,11 +352,25 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
               type="button"
               onClick={() => {
                 onUpdatePlatformModes({
+                  facebook: 'composer',
+                  instagram: 'composer',
+                  twitter: 'composer',
+                });
+                onNotify('Set all channels to Personal Copy & Post (no Business account or Page required).');
+              }}
+              className="px-3 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-md cursor-pointer whitespace-nowrap"
+            >
+              Personal Profile (No Business)
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                onUpdatePlatformModes({
                   facebook: 'official',
                   instagram: 'official',
                   twitter: 'skip',
                 });
-                onNotify('Set Facebook & Instagram to Live Official API, and X to Skip / Manual.');
+                onNotify('Set Facebook & Instagram to Live Official API, and X to Skip.');
               }}
               className="px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-md cursor-pointer whitespace-nowrap"
             >
@@ -430,11 +451,26 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
           </a>
         </div>
 
+        <div className="p-3.5 rounded-lg bg-amber-50/70 border border-amber-200 text-xs text-amber-950 space-y-1.5 leading-relaxed">
+          <div className="font-semibold">Posting to a personal Facebook user profile vs. a Page:</div>
+          <p>
+            Meta permanently removed personal-timeline API posting (<code className="font-mono">publish_actions</code>) in 2018—no third-party app can auto-post to a personal Facebook user timeline via Graph API. You have two zero-registration options:
+          </p>
+          <ul className="list-disc list-inside space-y-1">
+            <li>
+              <strong>Personal Facebook account right now (no Page or Meta App):</strong> Switch Facebook above to <strong>Personal Copy &amp; Post</strong> (or click <strong>Personal Profile (No Business)</strong>). Releasing a post copies the text to your clipboard and gives you a direct link to paste onto your personal Facebook feed.
+            </li>
+            <li>
+              <strong>Automated API posting without registering a real business:</strong> Creating a free <strong>&ldquo;Digital Creator&rdquo;</strong> or <strong>&ldquo;Personal Blog&rdquo;</strong> Facebook Page under your personal account + keeping a Meta App in <strong>Development Mode</strong> does <strong>not</strong> require legal business registration or verification.
+            </li>
+          </ul>
+        </div>
+
         <div className="p-3.5 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-700 space-y-2">
-          <div className="font-medium text-slate-900">Quick 3-step setup (no OAuth redirect needed):</div>
+          <div className="font-medium text-slate-900">Automated Page API setup (for a Creator / Personal Blog Page, no legal business required):</div>
           <ol className="list-decimal list-inside space-y-1">
             <li>
-              In Graph API Explorer, choose a <strong>Business</strong> app (or one with the <strong>Manage everything on your Page</strong> use case). Keep <strong>User or Page</strong> set to <strong>Get User Access Token</strong> — do <strong>not</strong> click &ldquo;Get Page Access Token&rdquo; directly (Meta&apos;s shortcut injects the deprecated <code className="font-mono">manage_pages</code> scope).
+              In Graph API Explorer, choose your Meta App (<em>Manage everything on your Page</em> use case; Development Mode is fine for your own posts). Keep <strong>User or Page</strong> set to <strong>Get User Access Token</strong> — do <strong>not</strong> click &ldquo;Get Page Access Token&rdquo; directly (Meta&apos;s shortcut injects the deprecated <code className="font-mono">manage_pages</code> scope).
             </li>
             <li>
               Add permissions:{' '}
@@ -461,6 +497,18 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
               Paste that User Token below and click <strong>Load Pages &amp; Instagram</strong>—Dispatch.md automatically exchanges it for your real <strong>Page Access Token</strong> (or pick your Page name from the Graph API Explorer dropdown <em>after</em> generating the User Token).
             </li>
           </ol>
+          <p className="text-slate-600 pt-1 border-t border-slate-200/80">
+            <strong>If 0 Pages appear even with permissions granted:</strong> (1) Open{' '}
+            <a
+              href="https://www.facebook.com/settings?tab=business_tools"
+              target="_blank"
+              rel="noreferrer"
+              className="text-blue-700 hover:underline"
+            >
+              Facebook Business Integrations
+            </a>
+            , remove your Meta App so Facebook shows the Page checkbox again when you regenerate; or (2) ensure your account has <strong>Full Control</strong> on a Facebook Page (not just a personal profile); or (3) paste a permanent <strong>System User Token</strong> from Meta Business Settings + your numeric Facebook Page ID below.
+          </p>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">

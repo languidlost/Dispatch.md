@@ -86,9 +86,11 @@ export const ConfirmReleaseModal: React.FC<ConfirmReleaseModalProps> = ({
                     <span className="font-mono text-slate-600">
                       {platformModes[plat] === 'official'
                         ? 'Live Official API'
-                        : platformModes[plat] === 'webhook'
-                          ? 'Webhook Bridge'
-                          : 'Payload Dry-Run'}
+                        : platformModes[plat] === 'composer'
+                          ? 'Personal Copy & Post'
+                          : platformModes[plat] === 'webhook'
+                            ? 'Webhook Bridge'
+                            : 'Payload Dry-Run'}
                     </span>
                   </div>
                 ))}

@@ -246,30 +246,167 @@ export async function startMetaGraphOAuth(appId: string): Promise<{
   return { userAccessToken, pages };
 }
 
-async function diagnoseUserTokenPermissions(userToken: string): Promise<string> {
+function normalizeFacebookPageInput(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return '';
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      const profileId = parsed.searchParams.get('id');
+      if (profileId) return profileId;
+      const slug = parsed.pathname.replace(/^\/+|\/+$/g, '').split('/')[0];
+      return slug || trimmed;
+    } catch {
+      return trimmed;
+    }
+  }
+  return trimmed;
+}
+
+async function inspectGranularTargetPageIds(token: string): Promise<{
+  tokenType?: string;
+  targetPageIds: string[];
+  grantedScopes: string[];
+}> {
   try {
     const res = await fetch(
-      `https://graph.facebook.com/v21.0/me/permissions?access_token=${encodeURIComponent(
-        userToken
-      )}`
+      `https://graph.facebook.com/v21.0/debug_token?input_token=${encodeURIComponent(
+        token
+      )}&access_token=${encodeURIComponent(token)}`
     );
     const json = await res.json().catch(() => ({}));
+    const data = json?.data;
+    if (!res.ok || !data) return { targetPageIds: [], grantedScopes: [] };
+    const granular: Array<{ scope?: string; target_ids?: string[] }> = data.granular_scopes || [];
+    const targetIds = new Set<string>();
+    for (const item of granular) {
+      if (
+        (item.scope === 'pages_manage_posts' ||
+          item.scope === 'pages_show_list' ||
+          item.scope === 'pages_read_engagement') &&
+        Array.isArray(item.target_ids)
+      ) {
+        item.target_ids.forEach((id) => targetIds.add(String(id)));
+      }
+    }
+    return {
+      tokenType: data.type,
+      targetPageIds: Array.from(targetIds),
+      grantedScopes: Array.isArray(data.scopes) ? data.scopes : [],
+    };
+  } catch {
+    return { targetPageIds: [], grantedScopes: [] };
+  }
+}
+
+async function fetchPagesFromFallbackEndpoints(
+  token: string,
+  explicitPageId?: string
+): Promise<{ pages: FacebookManagedPage[]; targetError?: string }> {
+  const collected = new Map<string, FacebookManagedPage>();
+  let targetError: string | undefined;
+
+  // 1. Check granular_scopes target_ids from debug_token
+  const debug = await inspectGranularTargetPageIds(token);
+  const candidateIds = new Set<string>(debug.targetPageIds);
+  const normalizedExplicit = explicitPageId ? normalizeFacebookPageInput(explicitPageId) : '';
+  if (normalizedExplicit) {
+    candidateIds.add(normalizedExplicit);
+  }
+
+  for (const id of candidateIds) {
+    const pageRes = await fetch(
+      `https://graph.facebook.com/v21.0/${encodeURIComponent(
+        id
+      )}?fields=id,name,category,access_token,instagram_business_account{id,username}&access_token=${encodeURIComponent(
+        token
+      )}`
+    );
+    const pageJson = await pageRes.json().catch(() => ({}));
+    if (pageRes.ok && !pageJson.error && pageJson.id) {
+      if (pageJson.access_token) {
+        collected.set(pageJson.id, {
+          id: pageJson.id,
+          name: pageJson.name || `Page ${pageJson.id}`,
+          access_token: pageJson.access_token,
+          instagram_business_account: pageJson.instagram_business_account,
+        });
+      } else if (id === normalizedExplicit) {
+        targetError = pageJson.category
+          ? `Found Page "${pageJson.name}" (${pageJson.id}), but Meta did not return a Page access_token—make sure your Facebook account has Full Control (or Create Content task) on this Page and that pages_manage_posts is granted.`
+          : `ID "${id}" appears to be a personal profile or non-Page object rather than a Facebook Page.`;
+      }
+    } else if (id === normalizedExplicit && pageJson?.error?.message) {
+      targetError = pageJson.error.message;
+    }
+  }
+
+  // 2. Check Business Portfolio pages if business_management scope was included
+  if (collected.size === 0) {
+    try {
+      const bizRes = await fetch(
+        `https://graph.facebook.com/v21.0/me/businesses?fields=id,name,owned_pages{id,name,access_token,instagram_business_account{id,username}},client_pages{id,name,access_token,instagram_business_account{id,username}}&access_token=${encodeURIComponent(
+          token
+        )}`
+      );
+      const bizJson = await bizRes.json().catch(() => ({}));
+      const businesses: Array<{
+        owned_pages?: { data?: FacebookManagedPage[] };
+        client_pages?: { data?: FacebookManagedPage[] };
+      }> = bizJson?.data || [];
+      for (const b of businesses) {
+        for (const pg of b.owned_pages?.data || []) {
+          if (pg.id && pg.access_token) collected.set(pg.id, pg);
+        }
+        for (const pg of b.client_pages?.data || []) {
+          if (pg.id && pg.access_token) collected.set(pg.id, pg);
+        }
+      }
+    } catch {
+      // Ignore if business_management isn't granted
+    }
+  }
+
+  return { pages: Array.from(collected.values()), targetError };
+}
+
+async function diagnoseUserTokenPermissions(
+  userToken: string,
+  explicitPageId?: string
+): Promise<string> {
+  try {
+    const [permRes, debug] = await Promise.all([
+      fetch(
+        `https://graph.facebook.com/v21.0/me/permissions?access_token=${encodeURIComponent(
+          userToken
+        )}`
+      ),
+      inspectGranularTargetPageIds(userToken),
+    ]);
+    const json = await permRes.json().catch(() => ({}));
     const list: Array<{ permission: string; status: string }> = json?.data || [];
     const granted = list.filter((p) => p.status === 'granted').map((p) => p.permission);
     const missing = ['pages_show_list', 'pages_manage_posts', 'pages_read_engagement'].filter(
       (req) => !granted.includes(req)
     );
     if (missing.length > 0) {
-      return `Your token is missing required Page permissions (${missing.join(', ')}). Granted: ${granted.join(', ') || 'none'}. Keep "User or Page" on "Get User Access Token" (do NOT click "Get Page Access Token"), add pages_show_list, pages_read_engagement, and pages_manage_posts, regenerate, and check your Page in the login popup.`;
+      return `Your token is missing required Page permissions (${missing.join(', ')}). Granted: ${granted.join(', ') || 'none'}. Keep "User or Page" on "Get User Access Token" (do NOT click "Get Page Access Token"), add pages_show_list, pages_read_engagement, and pages_manage_posts, regenerate, and check your Page in the popup.`;
     }
-    return 'Page permissions are granted, but 0 Pages were linked to this token. Click "Generate Access Token" again in Graph API Explorer, choose "Edit Access" or "Opt in to all current and future Pages", and make sure your Facebook Page is checked.';
+    if (debug.targetPageIds.length === 0) {
+      const idNote = explicitPageId
+        ? ` Also entered Page ID "${explicitPageId}", which Meta could not issue a Page token for.`
+        : '';
+      return `Meta granted Page permissions, but 0 Page IDs were opted into this token.${idNote} This happens when: (1) Facebook reused an old login without showing the Page checkbox—open facebook.com/settings?tab=business_tools, remove your Meta App, then regenerate in Graph API Explorer and explicitly check your Page; OR (2) your account does not have Full Control / Task access on a Facebook Page (personal profiles cannot receive Page tokens); OR (3) the Page is inside Meta Business Suite—use a Business Suite System User Token or enter your numeric Page ID below.`;
+    }
+    return `Token sees Page ID(s) ${debug.targetPageIds.join(', ')}, but Meta refused to issue a Page Access Token. Make sure your Facebook profile has Full Control (or Create Content task) on that Page, or generate a permanent System User Token in Meta Business Settings.`;
   } catch {
     return 'Keep "User or Page" on "Get User Access Token" (do not use "Get Page Access Token"), add pages_show_list, pages_read_engagement, and pages_manage_posts, check your Page in the popup, then click Load Pages & Instagram.';
   }
 }
 
 export async function fetchMetaManagedPages(
-  userOrPageToken: string
+  userOrPageToken: string,
+  explicitPageId?: string
 ): Promise<FacebookManagedPage[]> {
   const token = userOrPageToken.trim();
   // First inspect /me to detect whether the pasted token is already a Page Access Token or a User Token
@@ -301,14 +438,27 @@ export async function fetchMetaManagedPages(
     throw new Error(err?.error?.message || `Meta Graph API error (${res.status})`);
   }
   const json = await res.json();
-  return json.data || [];
+  const accounts: FacebookManagedPage[] = json.data || [];
+  if (accounts.length > 0) {
+    return accounts;
+  }
+
+  // Fallback: inspect granular_scopes / explicit Page ID / Business Portfolio pages
+  const fallback = await fetchPagesFromFallbackEndpoints(token, explicitPageId);
+  if (fallback.pages.length > 0) {
+    return fallback.pages;
+  }
+  if (fallback.targetError) {
+    throw new Error(fallback.targetError);
+  }
+  return [];
 }
 
 export async function resolveFacebookPageTarget(
   pageId: string,
   userOrPageToken: string
 ): Promise<{ pageId: string; pageToken: string; pageName?: string }> {
-  const cleanId = pageId.trim();
+  const cleanId = normalizeFacebookPageInput(pageId);
   const cleanToken = userOrPageToken.trim();
 
   // Check what node /me resolves to for this token
@@ -342,6 +492,7 @@ export async function resolveFacebookPageTarget(
   }
 
   // Otherwise the token is likely a User Access Token: inspect target ID & exchange for a Page Access Token
+  let explicitTargetError: string | undefined;
   if (cleanId) {
     const targetRes = await fetch(
       `https://graph.facebook.com/v21.0/${encodeURIComponent(
@@ -352,9 +503,12 @@ export async function resolveFacebookPageTarget(
     );
     const targetJson = await targetRes.json().catch(() => ({}));
     if (targetRes.ok && !targetJson.error) {
-      if (targetJson.metadata?.type === 'user' || (!targetJson.category && targetJson.id === meJson?.id)) {
+      if (
+        targetJson.metadata?.type === 'user' ||
+        (!targetJson.category && targetJson.id === meJson?.id)
+      ) {
         throw new Error(
-          `Facebook ID "${cleanId}" belongs to your personal profile, not a Facebook Page. Meta deprecated publish_actions (posting to personal timelines). Select a Facebook Page via "Load Pages & Instagram" instead.`
+          `Facebook ID "${cleanId}" belongs to your personal profile, not a Facebook Page. Meta deprecated publish_actions (posting to personal timelines). Use a Facebook Page ID instead.`
         );
       }
       if (targetJson.access_token) {
@@ -364,10 +518,13 @@ export async function resolveFacebookPageTarget(
           pageName: targetJson.name,
         };
       }
+      explicitTargetError = `Meta found "${targetJson.name || cleanId}" but did not include a Page access_token. Make sure your account has Full Control/Create Content on this Page, or add your numeric Page ID + a Page/System User Token.`;
+    } else if (targetJson?.error?.message) {
+      explicitTargetError = `Page ID lookup failed: ${targetJson.error.message}`;
     }
   }
 
-  // Try /me/accounts to obtain the Page Access Token
+  // Try /me/accounts + granular_scopes + Business Portfolio fallback
   const accountsRes = await fetch(
     `https://graph.facebook.com/v21.0/me/accounts?fields=id,name,access_token&access_token=${encodeURIComponent(
       cleanToken
@@ -375,7 +532,11 @@ export async function resolveFacebookPageTarget(
   );
   const accountsJson = await accountsRes.json().catch(() => ({}));
   const pages: FacebookManagedPage[] = accountsJson?.data || [];
-  const matched = cleanId ? pages.find((p) => p.id === cleanId) : pages[0];
+  const fallback =
+    pages.length === 0 ? await fetchPagesFromFallbackEndpoints(cleanToken, cleanId) : null;
+  const allPages = pages.length > 0 ? pages : fallback?.pages || [];
+
+  const matched = cleanId ? allPages.find((p) => p.id === cleanId) : allPages[0];
   if (matched?.access_token) {
     return {
       pageId: matched.id,
@@ -384,14 +545,15 @@ export async function resolveFacebookPageTarget(
     };
   }
 
-  const diagnostic = await diagnoseUserTokenPermissions(cleanToken);
-  if (!cleanId && pages.length === 0) {
-    throw new Error(`Meta returned 0 managed Pages for this User Token. ${diagnostic}`);
+  if (explicitTargetError) {
+    throw new Error(explicitTargetError);
+  }
+  if (fallback?.targetError) {
+    throw new Error(fallback.targetError);
   }
 
-  throw new Error(
-    `Could not exchange this token for a Page Access Token (User Tokens alone trigger Meta's deprecated publish_actions error). ${diagnostic}`
-  );
+  const diagnostic = await diagnoseUserTokenPermissions(cleanToken, cleanId);
+  throw new Error(diagnostic);
 }
 
 export { diagnoseUserTokenPermissions };
@@ -526,6 +688,16 @@ function openOAuthPopupAndWaitForToken(url: string, expectedState: string): Prom
   });
 }
 
+export function getPersonalComposerUrl(platform: SocialPlatform, text: string): string {
+  if (platform === 'twitter') {
+    return `https://x.com/intent/tweet?text=${encodeURIComponent(text)}`;
+  }
+  if (platform === 'instagram') {
+    return 'https://www.instagram.com/';
+  }
+  return 'https://www.facebook.com/';
+}
+
 export function buildApiPayloadPreview(
   platform: SocialPlatform,
   text: string,
@@ -538,6 +710,19 @@ export function buildApiPayloadPreview(
       method: 'SKIP',
       endpoint: 'Platform skipped (independent of other channels)',
       body: { platform, status: 'skipped' },
+    };
+  }
+
+  if (dispatchMode === 'composer') {
+    return {
+      method: 'MANUAL',
+      endpoint: getPersonalComposerUrl(platform, text),
+      body: {
+        platform,
+        mode: 'personal-copy-and-post',
+        text,
+        note: 'Copies text to clipboard and opens your personal profile feed/composer (no Business or Page API required).',
+      },
     };
   }
 
@@ -625,6 +810,16 @@ export async function publishToSocialPlatform(
       externalId: `skipped-${platform}`,
       timestamp: now,
       endpoint: 'Skipped',
+    };
+  }
+
+  if (options.dispatchMode === 'composer') {
+    return {
+      ok: true,
+      externalId: 'personal-composer',
+      permalink: getPersonalComposerUrl(platform, text),
+      timestamp: now,
+      endpoint: 'Personal Copy & Post',
     };
   }
 
